@@ -664,39 +664,15 @@ pub extern "C" fn retro_serialize_size() -> usize {
 /// Get memory data
 #[no_mangle]
 pub extern "C" fn retro_get_memory_data(id: u32) -> *mut c_void {
-    unsafe {
-        match id {
-            RETRO_MEMORY_SAVE_RAM => {
-                // Return NOR Flash as save RAM
-                if let Some(ref emu) = EMULATOR {
-                    // NOR data is private, we'd need to expose it
-                    ptr::null_mut()
-                } else {
-                    ptr::null_mut()
-                }
-            }
-            RETRO_MEMORY_SYSTEM_RAM => {
-                // Return system RAM
-                if let Some(ref mut emu) = EMULATOR {
-                    // RAM is private, we'd need to expose it
-                    ptr::null_mut()
-                } else {
-                    ptr::null_mut()
-                }
-            }
-            _ => ptr::null_mut(),
-        }
-    }
+    let _ = id;
+    ptr::null_mut()
 }
 
 /// Get memory size
 #[no_mangle]
 pub extern "C" fn retro_get_memory_size(id: u32) -> usize {
-    match id {
-        RETRO_MEMORY_SAVE_RAM => 1024 * 1024, // NOR Flash size
-        RETRO_MEMORY_SYSTEM_RAM => 32 * 1024, // RAM size
-        _ => 0,
-    }
+    let _ = id;
+    0
 }
 
 /// Reset the core
@@ -778,5 +754,13 @@ mod tests {
 
         assert_eq!(files.nor.as_deref(), Some(nor.as_path()));
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn unavailable_memory_regions_report_zero_size() {
+        for id in [RETRO_MEMORY_SAVE_RAM, RETRO_MEMORY_SYSTEM_RAM, u32::MAX] {
+            assert!(retro_get_memory_data(id).is_null());
+            assert_eq!(retro_get_memory_size(id), 0);
+        }
     }
 }
