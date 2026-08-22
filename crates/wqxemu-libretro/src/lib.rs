@@ -505,6 +505,28 @@ pub extern "C" fn retro_unload_game() {
     }
 }
 
+/// Reset active cheat codes.
+#[no_mangle]
+pub extern "C" fn retro_cheat_reset() {
+    // Cheats are not supported by this core.
+}
+
+/// Add or update a cheat code.
+#[no_mangle]
+pub extern "C" fn retro_cheat_set(_index: u32, _enabled: bool, _code: *const c_char) {
+    // Cheats are not supported by this core.
+}
+
+/// Load content through a libretro subsystem.
+#[no_mangle]
+pub extern "C" fn retro_load_game_special(
+    _game_type: u32,
+    _info: *const RetroGameInfo,
+    _num_info: usize,
+) -> bool {
+    false
+}
+
 /// Run one frame
 #[no_mangle]
 pub extern "C" fn retro_run() {
