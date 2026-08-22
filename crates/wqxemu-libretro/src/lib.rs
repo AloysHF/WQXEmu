@@ -46,6 +46,10 @@ const RETRO_PIXEL_FORMAT_RGB565: u32 = 1;
 const RETRO_MEMORY_SAVE_RAM: u32 = 0;
 const RETRO_MEMORY_SYSTEM_RAM: u32 = 2;
 
+const SERIALIZATION_BUFFER_SIZE: usize = 1024 * 1024;
+const SERIALIZATION_HEADER_SIZE: usize = 8;
+const SERIALIZATION_MAGIC: &[u8; 4] = b"WQXS";
+
 // Joypad constants
 const RETRO_DEVICE_JOYPAD: u32 = 1;
 const RETRO_DEVICE_ID_JOYPAD_B: u32 = 0;
@@ -246,6 +250,35 @@ fn assemble_firmware_files(game_path: &Path) -> wqxemu_core::RomFiles {
     }
 
     files
+}
+
+fn write_serialized_state(payload: &[u8], output: &mut [u8]) -> bool {
+    let Ok(payload_size) = u32::try_from(payload.len()) else {
+        return false;
+    };
+    let Some(required_size) = SERIALIZATION_HEADER_SIZE.checked_add(payload.len()) else {
+        return false;
+    };
+    if required_size > output.len() {
+        return false;
+    }
+
+    output.fill(0);
+    output[..4].copy_from_slice(SERIALIZATION_MAGIC);
+    output[4..SERIALIZATION_HEADER_SIZE].copy_from_slice(&payload_size.to_le_bytes());
+    output[SERIALIZATION_HEADER_SIZE..required_size].copy_from_slice(payload);
+    true
+}
+
+fn serialized_state_payload(data: &[u8]) -> Option<&[u8]> {
+    if data.len() < SERIALIZATION_HEADER_SIZE || &data[..4] != SERIALIZATION_MAGIC {
+        return None;
+    }
+
+    let payload_size = u32::from_le_bytes(data[4..SERIALIZATION_HEADER_SIZE].try_into().ok()?);
+    let payload_size = usize::try_from(payload_size).ok()?;
+    let end = SERIALIZATION_HEADER_SIZE.checked_add(payload_size)?;
+    data.get(SERIALIZATION_HEADER_SIZE..end)
 }
 
 fn key_id_for_token(model: MachineModel, token: &str) -> Option<u8> {
@@ -613,6 +646,9 @@ pub extern "C" fn retro_run() {
 #[no_mangle]
 pub extern "C" fn retro_serialize(data: *mut c_void, size: usize) -> bool {
     unsafe {
+        if data.is_null() {
+            return false;
+        }
         let emu = match EMULATOR.as_ref() {
             Some(e) => e,
             None => return false,
@@ -627,16 +663,15 @@ pub extern "C" fn retro_serialize(data: *mut c_void, size: usize) -> bool {
             }
         };
 
-        if bytes.len() > size {
+        let output = std::slice::from_raw_parts_mut(data as *mut u8, size);
+        if !write_serialized_state(&bytes, output) {
             log::error!(
-                "Save state too large: {} bytes needed, {} available",
+                "Save state too large: {} payload bytes, {} total bytes available",
                 bytes.len(),
                 size
             );
             return false;
         }
-
-        ptr::copy_nonoverlapping(bytes.as_ptr(), data as *mut u8, bytes.len());
         true
     }
 }
@@ -645,13 +680,20 @@ pub extern "C" fn retro_serialize(data: *mut c_void, size: usize) -> bool {
 #[no_mangle]
 pub extern "C" fn retro_unserialize(data: *const c_void, size: usize) -> bool {
     unsafe {
+        if data.is_null() {
+            return false;
+        }
         let emu = match EMULATOR.as_mut() {
             Some(e) => e,
             None => return false,
         };
 
         let bytes = std::slice::from_raw_parts(data as *const u8, size);
-        let state = match wqxemu_core::save::SaveState::deserialize(bytes) {
+        let Some(payload) = serialized_state_payload(bytes) else {
+            log::error!("Invalid save state envelope");
+            return false;
+        };
+        let state = match wqxemu_core::save::SaveState::deserialize(payload) {
             Ok(s) => s,
             Err(e) => {
                 log::error!("Failed to deserialize: {}", e);
@@ -671,8 +713,7 @@ pub extern "C" fn retro_unserialize(data: *const c_void, size: usize) -> bool {
 /// Get save state size
 #[no_mangle]
 pub extern "C" fn retro_serialize_size() -> usize {
-    // Return a generous size estimate
-    1024 * 1024 // 1MB should be more than enough
+    SERIALIZATION_BUFFER_SIZE
 }
 
 /// Get memory data
@@ -815,5 +856,43 @@ mod tests {
             map_keyboard_key(MachineModel::Nc1020, RETROK_DELETE),
             Some(0x0f)
         );
+    }
+
+    #[test]
+    fn serialization_envelope_ignores_fixed_buffer_padding() {
+        let payload = b"serialized state";
+        let mut buffer = vec![0xaa; 128];
+
+        assert!(write_serialized_state(payload, &mut buffer));
+        assert_eq!(serialized_state_payload(&buffer), Some(payload.as_slice()));
+        assert!(buffer[SERIALIZATION_HEADER_SIZE + payload.len()..]
+            .iter()
+            .all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn serialization_envelope_rejects_invalid_lengths() {
+        let mut buffer = [0u8; 16];
+        assert!(!write_serialized_state(&[0u8; 9], &mut buffer));
+        assert_eq!(serialized_state_payload(&buffer), None);
+
+        buffer[..4].copy_from_slice(SERIALIZATION_MAGIC);
+        buffer[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(serialized_state_payload(&buffer), None);
+    }
+
+    #[test]
+    fn serialization_envelope_round_trips_an_emulator_state() {
+        let emulator =
+            Emulator::new(MachineModel::Nc1020, &wqxemu_core::RomFiles::default()).unwrap();
+        let bytes = emulator.save_state().serialize().unwrap();
+        let mut buffer = vec![0u8; SERIALIZATION_BUFFER_SIZE];
+
+        assert!(write_serialized_state(&bytes, &mut buffer));
+        let restored =
+            wqxemu_core::save::SaveState::deserialize(serialized_state_payload(&buffer).unwrap())
+                .unwrap();
+
+        assert_eq!(restored.version, emulator.save_state().version);
     }
 }
