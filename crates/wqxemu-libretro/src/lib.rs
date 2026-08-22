@@ -19,8 +19,7 @@ use std::panic;
 use std::path::{Path, PathBuf};
 use std::ptr;
 
-use wqxemu_core::input::key_ids;
-use wqxemu_core::{Emulator, LCD_HEIGHT, LCD_WIDTH};
+use wqxemu_core::{key_id_for, layout_for, Emulator, MachineModel, LCD_HEIGHT, LCD_WIDTH};
 
 // ============================================================
 // libretro constants
@@ -94,8 +93,13 @@ type RetroAudioSampleBatchT =
 type RetroInputPollT = Option<unsafe extern "C" fn()>;
 type RetroInputStateT =
     Option<unsafe extern "C" fn(port: u32, device: u32, index: u32, id: u32) -> i16>;
-type RetroKeyboardCallbackT =
+type RetroKeyboardEventT =
     Option<unsafe extern "C" fn(down: bool, keycode: u32, character: u32, key_modifiers: u16)>;
+
+#[repr(C)]
+struct RetroKeyboardCallback {
+    callback: RetroKeyboardEventT,
+}
 
 #[repr(C)]
 struct RetroSystemInfo {
@@ -162,7 +166,6 @@ static mut AUDIO_CB: RetroAudioSampleT = None;
 static mut AUDIO_BATCH_CB: RetroAudioSampleBatchT = None;
 static mut INPUT_POLL_CB: RetroInputPollT = None;
 static mut INPUT_STATE_CB: RetroInputStateT = None;
-static mut KEYBOARD_CB: RetroKeyboardCallbackT = None;
 static mut SYSTEM_DIR: Option<String> = None;
 static mut SAVE_DIR: Option<String> = None;
 
@@ -245,62 +248,78 @@ fn assemble_firmware_files(game_path: &Path) -> wqxemu_core::RomFiles {
     files
 }
 
-/// Map RetroArch keyboard keycode to NC1020 key ID
-fn map_keyboard_key(keycode: u32) -> Option<u8> {
-    match keycode {
-        RETROK_RETURN => Some(key_ids::ENTER),
-        RETROK_ESCAPE => Some(key_ids::ESC),
-        RETROK_SPACE => Some(key_ids::SPACE),
-        RETROK_BACKSPACE => Some(key_ids::BACKSPACE),
-        RETROK_UP => Some(key_ids::UP),
-        RETROK_DOWN => Some(key_ids::DOWN),
-        RETROK_LEFT => Some(key_ids::LEFT),
-        RETROK_RIGHT => Some(key_ids::RIGHT),
-        RETROK_PAGEUP => Some(key_ids::PAGE_UP),
-        RETROK_PAGEDOWN => Some(key_ids::PAGE_DOWN),
-        RETROK_DELETE => Some(key_ids::POWER),
-        // F keys
-        282 => Some(key_ids::F1),  // F1
-        283 => Some(key_ids::F2),  // F2
-        284 => Some(key_ids::F3),  // F3
-        285 => Some(key_ids::F4),  // F4
-        286 => Some(key_ids::F5),  // F5
-        287 => Some(key_ids::F6),  // F6
-        288 => Some(key_ids::F7),  // F7
-        289 => Some(key_ids::F8),  // F8
-        290 => Some(key_ids::F9),  // F9
-        291 => Some(key_ids::F10), // F10
-        292 => Some(key_ids::F11), // F11
-        // Letters
-        k if k >= RETROK_A && k <= RETROK_Z => {
-            let letter_idx = (k - RETROK_A) as u8;
-            Some(0x10 + letter_idx) // Map to NC1020 key matrix
-        }
-        // Numbers
-        k if k >= RETROK_0 && k <= RETROK_9 => {
-            let num_idx = (k - RETROK_0) as u8;
-            Some(0x20 + num_idx) // Map to NC1020 key matrix
-        }
-        _ => None,
-    }
+fn key_id_for_token(model: MachineModel, token: &str) -> Option<u8> {
+    layout_for(model)
+        .iter()
+        .find(|key| {
+            key.label
+                .split('/')
+                .chain(key.hint.split('/'))
+                .any(|alias| alias == token)
+        })
+        .map(|key| key_id_for(model, key.row, key.col))
 }
 
-/// Map RetroPad button to NC1020 key ID
-fn map_joypad_button(button: u32) -> Option<u8> {
-    match button {
-        RETRO_DEVICE_ID_JOYPAD_UP => Some(key_ids::UP),
-        RETRO_DEVICE_ID_JOYPAD_DOWN => Some(key_ids::DOWN),
-        RETRO_DEVICE_ID_JOYPAD_LEFT => Some(key_ids::LEFT),
-        RETRO_DEVICE_ID_JOYPAD_RIGHT => Some(key_ids::RIGHT),
-        RETRO_DEVICE_ID_JOYPAD_A => Some(key_ids::ENTER),
-        RETRO_DEVICE_ID_JOYPAD_B => Some(key_ids::ESC),
-        RETRO_DEVICE_ID_JOYPAD_X => Some(key_ids::F1),
-        RETRO_DEVICE_ID_JOYPAD_Y => Some(key_ids::F4),
-        RETRO_DEVICE_ID_JOYPAD_L => Some(key_ids::PAGE_UP),
-        RETRO_DEVICE_ID_JOYPAD_R => Some(key_ids::PAGE_DOWN),
-        RETRO_DEVICE_ID_JOYPAD_START => Some(key_ids::F10),
-        RETRO_DEVICE_ID_JOYPAD_SELECT => Some(key_ids::F11),
-        _ => None,
+/// Map a RetroArch keyboard keycode to the active model's keypad matrix.
+fn map_keyboard_key(model: MachineModel, keycode: u32) -> Option<u8> {
+    let token = match keycode {
+        RETROK_RETURN => "ENT".to_owned(),
+        RETROK_ESCAPE => "ESC".to_owned(),
+        RETROK_SPACE => "SPC".to_owned(),
+        RETROK_BACKSPACE => "F2".to_owned(),
+        RETROK_UP => "UP".to_owned(),
+        RETROK_DOWN => "DN".to_owned(),
+        RETROK_LEFT => "LT".to_owned(),
+        RETROK_RIGHT => "RT".to_owned(),
+        RETROK_PAGEUP => "PGUP".to_owned(),
+        RETROK_PAGEDOWN => "PGDN".to_owned(),
+        RETROK_DELETE if model == MachineModel::Nc1020 => "DEL".to_owned(),
+        RETROK_DELETE => "F12".to_owned(),
+        key if (RETROK_F1..=RETROK_F12).contains(&key) => {
+            format!("F{}", key - RETROK_F1 + 1)
+        }
+        key if (RETROK_A..=RETROK_Z).contains(&key) => char::from_u32(key)
+            .unwrap()
+            .to_ascii_uppercase()
+            .to_string(),
+        key if (RETROK_0..=RETROK_9).contains(&key) => char::from_u32(key).unwrap().to_string(),
+        _ => return None,
+    };
+
+    key_id_for_token(model, &token)
+}
+
+/// Map a RetroPad button to the active model's keypad matrix.
+fn map_joypad_button(model: MachineModel, button: u32) -> Option<u8> {
+    let token = match button {
+        RETRO_DEVICE_ID_JOYPAD_UP => "UP",
+        RETRO_DEVICE_ID_JOYPAD_DOWN => "DN",
+        RETRO_DEVICE_ID_JOYPAD_LEFT => "LT",
+        RETRO_DEVICE_ID_JOYPAD_RIGHT => "RT",
+        RETRO_DEVICE_ID_JOYPAD_A => "ENT",
+        RETRO_DEVICE_ID_JOYPAD_B => "ESC",
+        RETRO_DEVICE_ID_JOYPAD_X => "F1",
+        RETRO_DEVICE_ID_JOYPAD_Y => "F4",
+        RETRO_DEVICE_ID_JOYPAD_L => "PGUP",
+        RETRO_DEVICE_ID_JOYPAD_R => "PGDN",
+        RETRO_DEVICE_ID_JOYPAD_START => "F10",
+        RETRO_DEVICE_ID_JOYPAD_SELECT => "F11",
+        _ => return None,
+    };
+
+    key_id_for_token(model, token)
+}
+
+unsafe extern "C" fn keyboard_event(
+    down: bool,
+    keycode: u32,
+    _character: u32,
+    _key_modifiers: u16,
+) {
+    if let Some(emulator) = EMULATOR.as_mut() {
+        if let Some(key_id) = map_keyboard_key(emulator.model(), keycode) {
+            emulator.set_key(key_id, down);
+        }
     }
 }
 
@@ -318,6 +337,15 @@ pub extern "C" fn retro_set_environment(cb: RetroEnvironmentT) {
     set_input_descriptors();
     // Set core variables
     set_core_variables();
+    let mut keyboard_callback = RetroKeyboardCallback {
+        callback: Some(keyboard_event),
+    };
+    unsafe {
+        environment(
+            RETRO_ENVIRONMENT_SET_KEYBOARD_CALLBACK,
+            &mut keyboard_callback as *mut RetroKeyboardCallback as *mut c_void,
+        );
+    }
 }
 
 /// Set video refresh callback
@@ -357,14 +385,6 @@ pub extern "C" fn retro_set_input_poll(cb: RetroInputPollT) {
 pub extern "C" fn retro_set_input_state(cb: RetroInputStateT) {
     unsafe {
         INPUT_STATE_CB = cb;
-    }
-}
-
-/// Set keyboard callback
-#[no_mangle]
-pub extern "C" fn retro_set_keyboard_callback(cb: RetroKeyboardCallbackT) {
-    unsafe {
-        KEYBOARD_CB = cb;
     }
 }
 
@@ -556,16 +576,10 @@ pub extern "C" fn retro_run() {
             // Check all joypad buttons
             for button in 0..12 {
                 let state = get_state(0, RETRO_DEVICE_JOYPAD, 0, button);
-                if let Some(key_id) = map_joypad_button(button) {
+                if let Some(key_id) = map_joypad_button(emu.model(), button) {
                     emu.set_key(key_id, state != 0);
                 }
             }
-        }
-
-        // Process keyboard input
-        if let Some(ref mut emu) = EMULATOR {
-            // Note: Keyboard callback handling would go here
-            // For now, we rely on joypad mapping
         }
 
         // Run one frame
@@ -762,5 +776,44 @@ mod tests {
             assert!(retro_get_memory_data(id).is_null());
             assert_eq!(retro_get_memory_size(id), 0);
         }
+    }
+
+    #[test]
+    fn maps_navigation_to_each_models_matrix() {
+        let expectations = [
+            (MachineModel::Nc1020, 0x1a),
+            (MachineModel::Pc1000, 0x32),
+            (MachineModel::Cc800, 0x32),
+            (MachineModel::Nc2000, 0x13),
+            (MachineModel::Nc3000, 0x13),
+        ];
+
+        for (model, expected) in expectations {
+            assert_eq!(map_keyboard_key(model, RETROK_UP), Some(expected));
+            assert_eq!(
+                map_joypad_button(model, RETRO_DEVICE_ID_JOYPAD_UP),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn maps_keyboard_aliases_and_model_specific_power_keys() {
+        assert_eq!(
+            map_keyboard_key(MachineModel::Nc1020, RETROK_0 + 1),
+            Some(0x34)
+        );
+        assert_eq!(
+            map_keyboard_key(MachineModel::Pc1000, RETROK_0 + 1),
+            Some(0x1c)
+        );
+        assert_eq!(
+            map_keyboard_key(MachineModel::Nc2000, RETROK_DELETE),
+            Some(0x00)
+        );
+        assert_eq!(
+            map_keyboard_key(MachineModel::Nc1020, RETROK_DELETE),
+            Some(0x0f)
+        );
     }
 }
