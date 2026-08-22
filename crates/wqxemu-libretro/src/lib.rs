@@ -16,7 +16,7 @@
 use std::ffi::{c_void, CStr};
 use std::os::raw::c_char;
 use std::panic;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::ptr;
 
 use wqxemu_core::input::key_ids;
@@ -180,6 +180,69 @@ unsafe fn get_emulator_mut() -> &'static mut Emulator {
 
 unsafe fn environment(cmd: u32, data: *mut c_void) -> bool {
     ENV_CB.map(|cb| cb(cmd, data)).unwrap_or(false)
+}
+
+fn extension_matches(path: &Path, extensions: &[&str]) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extensions
+                .iter()
+                .any(|expected| extension.eq_ignore_ascii_case(expected))
+        })
+}
+
+fn find_companion(parent: &Path, stem: Option<&str>, extensions: &[&str]) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(parent).ok()?;
+    let candidates: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file() && extension_matches(path, extensions))
+        .collect();
+
+    if let Some(stem) = stem {
+        if let Some(path) = candidates.iter().find(|path| {
+            path.file_stem()
+                .and_then(|candidate| candidate.to_str())
+                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(stem))
+        }) {
+            return Some(path.clone());
+        }
+    }
+
+    (candidates.len() == 1).then(|| candidates[0].clone())
+}
+
+fn assemble_firmware_files(game_path: &Path) -> wqxemu_core::RomFiles {
+    let parent = game_path.parent().unwrap_or_else(|| Path::new(""));
+    let stem = game_path.file_stem().and_then(|stem| stem.to_str());
+    let extension = game_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase);
+
+    let mut files = wqxemu_core::RomFiles::new(None, None, None, None);
+    match extension.as_deref() {
+        Some("nand") => files.nand = Some(game_path.to_path_buf()),
+        Some("nand0") => files.nand0 = Some(game_path.to_path_buf()),
+        Some("fls") | Some("nor") => files.nor = Some(game_path.to_path_buf()),
+        _ => files.rom = Some(game_path.to_path_buf()),
+    }
+
+    if files.rom.is_none() {
+        files.rom = find_companion(parent, stem, &["bin", "rom"]);
+    }
+    if files.nor.is_none() {
+        files.nor = find_companion(parent, stem, &["fls", "nor"]);
+    }
+    if files.nand.is_none() {
+        files.nand = find_companion(parent, stem, &["nand"]);
+    }
+    if files.nand0.is_none() {
+        files.nand0 = find_companion(parent, stem, &["nand0"]);
+    }
+
+    files
 }
 
 /// Map RetroArch keyboard keycode to NC1020 key ID
@@ -361,7 +424,7 @@ pub extern "C" fn retro_get_system_info(info: *mut RetroSystemInfo) {
         (*info) = RetroSystemInfo {
             library_name: c"WQXEmu".as_ptr(),
             library_version: c"0.1.0".as_ptr(),
-            valid_extensions: c"bin|rom|fls".as_ptr(),
+            valid_extensions: c"bin|fls|rom|nor|nand|nand0".as_ptr(),
             need_fullpath: true,
             block_extract: true,
         };
@@ -418,56 +481,8 @@ pub extern "C" fn retro_load_game(info: *const RetroGameInfo) -> bool {
             }
         };
 
-        // Assemble ROM / Flash files. The loaded file is classified by
-        // extension; sibling files with the same stem are picked up too
-        // (e.g. loading `nc2000.nand` finds `nc2000.nor`/`nc2000.nand0`).
         let game_path = Path::new(path);
-        let stem = game_path
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned());
-        let ext = game_path
-            .extension()
-            .map(|e| e.to_string_lossy().to_ascii_lowercase());
-        let parent = game_path
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_default();
-
-        let mut files = wqxemu_core::RomFiles::new(None, None, None, None);
-        match ext.as_deref() {
-            Some("nand") => files.nand = Some(game_path.to_path_buf()),
-            Some("nand0") => files.nand0 = Some(game_path.to_path_buf()),
-            Some("fls") | Some("nor") => files.nor = Some(game_path.to_path_buf()),
-            _ => files.rom = Some(game_path.to_path_buf()),
-        }
-
-        if files.nor.is_none() {
-            if let Some(stem) = &stem {
-                for ext in ["fls", "nor"] {
-                    let candidate = parent.join(format!("{}.{}", stem, ext));
-                    if candidate.exists() {
-                        files.nor = Some(candidate);
-                        break;
-                    }
-                }
-            }
-        }
-        if files.nand.is_none() {
-            if let Some(stem) = &stem {
-                let candidate = parent.join(format!("{}.nand", stem));
-                if candidate.exists() {
-                    files.nand = Some(candidate);
-                }
-            }
-        }
-        if files.nand0.is_none() {
-            if let Some(stem) = &stem {
-                let candidate = parent.join(format!("{}.nand0", stem));
-                if candidate.exists() {
-                    files.nand0 = Some(candidate);
-                }
-            }
-        }
+        let files = assemble_firmware_files(game_path);
 
         let model = wqxemu_core::detect_model(&files);
         log::info!("Detected model: {}", model.name());
@@ -714,4 +729,54 @@ fn set_input_descriptors() {
 fn set_core_variables() {
     // Core variables allow users to configure the emulator through RetroArch UI
     // We'll skip the full implementation for now
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_directory(name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "wqxemu-libretro-{name}-{}-{nonce}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn assembles_uniquely_named_sibling_firmware() {
+        let directory = test_directory("siblings");
+        fs::create_dir_all(&directory).unwrap();
+        let rom = directory.join("obj_lu.bin");
+        let nor = directory.join("nc1020.fls");
+        fs::write(&rom, []).unwrap();
+        fs::write(&nor, []).unwrap();
+
+        let files = assemble_firmware_files(&rom);
+
+        assert_eq!(files.rom.as_deref(), Some(rom.as_path()));
+        assert_eq!(files.nor.as_deref(), Some(nor.as_path()));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn prefers_same_stem_when_multiple_companions_exist() {
+        let directory = test_directory("same-stem");
+        fs::create_dir_all(&directory).unwrap();
+        let rom = directory.join("pc1000.rom");
+        let nor = directory.join("pc1000.fls");
+        fs::write(&rom, []).unwrap();
+        fs::write(&nor, []).unwrap();
+        fs::write(directory.join("backup.fls"), []).unwrap();
+
+        let files = assemble_firmware_files(&rom);
+
+        assert_eq!(files.nor.as_deref(), Some(nor.as_path()));
+        fs::remove_dir_all(directory).unwrap();
+    }
 }
