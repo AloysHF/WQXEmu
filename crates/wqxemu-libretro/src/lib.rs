@@ -36,7 +36,6 @@ const RETRO_ENVIRONMENT_SET_VARIABLES: u32 = 16;
 const RETRO_ENVIRONMENT_GET_VARIABLE: u32 = 17;
 const RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE: u32 = 18;
 const RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY: u32 = 9;
-const RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY: u32 = 31;
 
 // Pixel format
 const RETRO_PIXEL_FORMAT_XRGB8888: u32 = 0;
@@ -172,7 +171,6 @@ static mut AUDIO_BATCH_CB: RetroAudioSampleBatchT = None;
 static mut INPUT_POLL_CB: RetroInputPollT = None;
 static mut INPUT_STATE_CB: RetroInputStateT = None;
 static mut SYSTEM_DIR: Option<String> = None;
-static mut SAVE_DIR: Option<String> = None;
 
 // ============================================================
 // Helper functions
@@ -458,16 +456,6 @@ pub extern "C" fn retro_init() {
             SYSTEM_DIR = Some(CStr::from_ptr(sys_dir).to_string_lossy().into_owned());
         }
 
-        // Get save directory
-        let mut save_dir: *const c_char = ptr::null();
-        if environment(
-            RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY,
-            &mut save_dir as *mut *const c_char as *mut c_void,
-        ) && !save_dir.is_null()
-        {
-            SAVE_DIR = Some(CStr::from_ptr(save_dir).to_string_lossy().into_owned());
-        }
-
         // Set pixel format to XRGB8888
         let mut pixel_format = RETRO_PIXEL_FORMAT_XRGB8888;
         environment(
@@ -577,15 +565,6 @@ pub extern "C" fn retro_load_game(info: *const RetroGameInfo) -> bool {
 #[no_mangle]
 pub extern "C" fn retro_unload_game() {
     unsafe {
-        // Save NOR before unloading
-        if let Some(ref emu) = EMULATOR {
-            if let Some(ref save_dir) = SAVE_DIR {
-                let nor_path = std::path::Path::new(save_dir).join("nc1020.fls");
-                if let Err(e) = emu.save_nor(&nor_path.to_string_lossy()) {
-                    log::warn!("Failed to save NOR: {}", e);
-                }
-            }
-        }
         EMULATOR = None;
     }
 }
