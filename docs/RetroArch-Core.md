@@ -40,30 +40,35 @@ The compiled core will be at:
 - iOS (arm64)
 - webOS
 
-## Loading Content
+## Starting a Machine
 
-### Automatic Model Detection
+WQXEmu is a low-level emulator that boots original hardware firmware. The firmware
+is system data, not game content, so the core starts without content and does not
+accept ROM, NOR, or NAND files through **Load Content**.
 
-The core automatically detects the model based on the loaded firmware files:
+1. Install the required files in RetroArch's system directory using the exact paths below
+2. Select **Load Core → WQXEmu**
+3. Select **Start Core**; the initial default is NC1020
+4. To use another model, open **Quick Menu → Core Options → Machine Model** while the core is running
+5. Select **Quick Menu → Close Content**, then **Start Core** again
 
-1. Open RetroArch
-2. Select **Load Core** → **WQXEmu**
-3. Select **Load Content** and choose a firmware file
-4. The core will automatically detect the model and load required firmware files
+The selected model is applied when the core starts, so changing it always requires
+closing and starting the core again.
 
 ### Firmware File Requirements
 
-| Model | Required firmware | File types |
-|-------|-------------------|------------|
-| NC1020 | ROM + NOR | `.bin`, `.fls` |
-| PC1000 | ROM + NOR | `.rom`, `.fls` |
-| CC800 | ROM + NOR | `.bin`, `.fls` |
-| NC2000 | NOR + NAND + NAND0 | `.nor`, `.nand`, `.nand0` |
-| NC3000 | NOR + NAND | `.nor`, `.nand` |
+| Model | Required files | Optional files |
+|-------|----------------|----------------|
+| NC1020 | `obj_lu.bin`, `nc1020.fls` | — |
+| PC1000 | `pc1000.rom`, `pc1000.fls` | — |
+| CC800 | `obj.bin`, `cc800.fls` | — |
+| NC2000 | `nc2000.nor`, `nc2000.nand`, `nc2000.nand0` | — |
+| NC3000 | `nc3000.nor`, `nc3000.nand` | `nc3000.nand0` |
 
 ### Firmware File Placement
 
-Keep each model's firmware files together in its own directory. The directory can be anywhere RetroArch can access; placing it under RetroArch's `system/` directory is recommended:
+The paths and filenames are fixed relative to the system directory configured in
+RetroArch. Only the files for the selected model are required:
 
 ```
 system/
@@ -83,10 +88,14 @@ system/
     │   └── nc2000.nand0
     └── nc3000/
         ├── nc3000.nor
-        └── nc3000.nand
+        ├── nc3000.nand
+        └── nc3000.nand0    # Optional
 ```
 
-Load any one file from the model's directory. The core first looks for companion files with the same stem, then accepts a uniquely matching firmware extension in that directory. This supports both pairs such as `pc1000.rom` + `pc1000.fls` and differently named pairs such as `obj_lu.bin` + `nc1020.fls`.
+RetroArch's core information page lists the firmware for all five models. Those
+entries are conditional: a complete set is required only for the model selected in
+Core Options. The core validates the selected set at startup and reports every
+missing path.
 
 ## RetroPad Button Mapping
 
@@ -109,7 +118,27 @@ Load any one file from the model's directory. The core first looks for companion
 
 ## Core Options
 
-The current core does not expose core-specific options. Display scaling, audio volume, input bindings, and logging use RetroArch's frontend settings.
+**Machine Model** selects NC1020, PC1000, CC800, NC2000, or NC3000. NC1020 is the
+default, and a running machine must be restarted after this option changes.
+
+Display scaling, audio volume, input bindings, and logging continue to use
+RetroArch's frontend settings.
+
+## Persistent Device State
+
+The core keeps the source firmware files in the system directory read-only. On a
+normal content unload or core shutdown, it writes the complete writable device
+state to:
+
+```
+<RetroArch save directory>/<model>/<firmware fingerprint>.wqxs
+```
+
+The compressed file includes writable flash/NAND, RAM, CPU, RTC, and peripheral
+state. The model and a fingerprint of the complete source firmware set isolate
+incompatible sessions. It is restored automatically the next time the same model
+and firmware set starts. An abnormal frontend termination cannot flush changes
+from the current session.
 
 ## Save States
 
@@ -127,8 +156,8 @@ Save states are supported through RetroArch's save state system.
 
 - The core rejects save states created for a different model
 - Use the same firmware set when loading a save state
-- Save states are separate from persistent sessions
-- Source firmware dumps remain read-only; flash changes are not persisted after unloading content
+- Manual save states are separate from the automatically managed persistent device state
+- Source firmware dumps remain read-only
 
 ## Screenshots
 
@@ -140,8 +169,8 @@ Screenshots can be taken through RetroArch:
 
 ### Common Issues
 
-1. **"No firmware found"** — Ensure firmware files are in the correct location
-2. **"Model detection failed"** — Keep only one model's firmware set in the selected file's directory and verify all required files are present
+1. **"Missing firmware"** — Verify the exact system-directory paths for the selected model
+2. **The wrong machine starts** — Change **Core Options → Machine Model**, then restart the core
 3. **"Black screen"** — Check firmware file integrity
 
 ### Debug Logging

@@ -101,12 +101,33 @@ RetroArch/
         │   └── nc2000.nand0
         └── nc3000/
             ├── nc3000.nor
-            └── nc3000.nand
+            ├── nc3000.nand
+            └── nc3000.nand0    # Optional
 ```
+
+These paths and filenames are fixed. NC1020, PC1000, CC800, and NC2000 require
+every file shown for that model. NC3000 requires its NOR and NAND files; NAND0 is
+optional. Firmware is system data and cannot be selected with **Load Content**.
 
 ### Core Options
 
-The current core does not expose core-specific options. Use RetroArch's frontend settings for display, audio, and input configuration.
+Select **Machine Model** to choose NC1020, PC1000, CC800, NC2000, or NC3000. NC1020
+is the default. Restart the core after changing the model. Use RetroArch's frontend
+settings for display, audio, and input configuration.
+
+### Starting the Core
+
+1. Select **Load Core → WQXEmu**
+2. Select **Start Core**; the initial default is NC1020
+3. To use another model, select **Quick Menu → Core Options → Machine Model**
+4. Select **Quick Menu → Close Content**, then **Start Core** again
+
+### Persistent Device State
+
+Source firmware remains read-only. On a normal unload or shutdown, the core saves
+a compressed session under RetroArch's configured save directory as
+`<model>/<firmware fingerprint>.wqxs`. The same model and firmware set resume that
+session automatically. An abnormal app termination cannot flush current changes.
 
 ## Performance Tips
 
@@ -120,7 +141,7 @@ The current core does not expose core-specific options. Use RetroArch's frontend
 ### Common Issues
 
 1. **"Core failed to load"** — Ensure the core file is in the correct location
-2. **"No firmware found"** — Check firmware file paths
+2. **"Missing firmware"** — Check the exact system-directory paths for the selected model
 3. **"Black screen"** — Try a different firmware version
 4. **"Audio crackling"** — Adjust RetroArch's frontend audio latency settings
 5. **"App crashes on startup"** — Check iOS version compatibility
