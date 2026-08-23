@@ -8,6 +8,7 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 
 use crate::cpu::Cpu;
@@ -83,6 +84,39 @@ impl RomFiles {
             nand0,
         }
     }
+
+    /// Calculate a stable identity for the complete source firmware set.
+    pub fn fingerprint(&self) -> Result<u64> {
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        let mut buffer = [0u8; 64 * 1024];
+        for (slot, path) in [&self.rom, &self.nor, &self.nand, &self.nand0]
+            .into_iter()
+            .enumerate()
+        {
+            hash = fnv1a(hash, &[slot as u8, u8::from(path.is_some())]);
+            let Some(path) = path else {
+                continue;
+            };
+            let file = std::fs::File::open(path)?;
+            hash = fnv1a(hash, &file.metadata()?.len().to_le_bytes());
+            let mut reader = BufReader::new(file);
+            loop {
+                let count = reader.read(&mut buffer)?;
+                if count == 0 {
+                    break;
+                }
+                hash = fnv1a(hash, &buffer[..count]);
+            }
+        }
+        Ok(hash)
+    }
+}
+
+fn fnv1a(mut hash: u64, bytes: &[u8]) -> u64 {
+    for byte in bytes {
+        hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 /// A single hardware model implementation.
@@ -189,3 +223,36 @@ pub use crate::audio::Audio as SharedAudio;
 pub use crate::flash::Flash as SharedFlash;
 pub use crate::input::Input as SharedInput;
 pub use crate::timer::Timer as SharedTimer;
+
+#[cfg(test)]
+mod tests {
+    use super::RomFiles;
+
+    #[test]
+    fn firmware_fingerprint_depends_on_slot_and_content() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first.bin");
+        let renamed = directory.path().join("renamed.bin");
+        let different = directory.path().join("different.bin");
+        std::fs::write(&first, b"firmware").unwrap();
+        std::fs::write(&renamed, b"firmware").unwrap();
+        std::fs::write(&different, b"different").unwrap();
+
+        let rom = RomFiles::new(Some(first), None, None, None)
+            .fingerprint()
+            .unwrap();
+        let same_rom = RomFiles::new(Some(renamed.clone()), None, None, None)
+            .fingerprint()
+            .unwrap();
+        let nor = RomFiles::new(None, Some(renamed), None, None)
+            .fingerprint()
+            .unwrap();
+        let other_rom = RomFiles::new(Some(different), None, None, None)
+            .fingerprint()
+            .unwrap();
+
+        assert_eq!(rom, same_rom);
+        assert_ne!(rom, nor);
+        assert_ne!(rom, other_rom);
+    }
+}

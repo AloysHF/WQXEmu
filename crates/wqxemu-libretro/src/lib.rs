@@ -13,14 +13,14 @@
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 #![allow(clippy::manual_range_contains)]
 
-use std::ffi::{c_void, CStr};
+use std::ffi::{c_void, CStr, CString};
 use std::os::raw::c_char;
 use std::panic;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::ptr;
 
-use wqxemu_core::input::key_ids;
-use wqxemu_core::{Emulator, LCD_HEIGHT, LCD_WIDTH};
+use wqxemu_core::save::{read_persistent_state_file, write_persistent_state_file};
+use wqxemu_core::{key_id_for, layout_for, Emulator, MachineModel, LCD_HEIGHT, LCD_WIDTH};
 
 // ============================================================
 // libretro constants
@@ -30,22 +30,27 @@ const RETRO_API_VERSION: u32 = 1;
 const RETRO_REGION_NTSC: u32 = 0;
 
 // Environment commands
-const RETRO_ENVIRONMENT_SET_PIXEL_FORMAT: u32 = 1;
+const RETRO_ENVIRONMENT_SET_PIXEL_FORMAT: u32 = 10;
+const RETRO_ENVIRONMENT_SET_MESSAGE: u32 = 6;
+const RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY: u32 = 9;
 const RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS: u32 = 11;
 const RETRO_ENVIRONMENT_SET_KEYBOARD_CALLBACK: u32 = 12;
+const RETRO_ENVIRONMENT_GET_VARIABLE: u32 = 15;
 const RETRO_ENVIRONMENT_SET_VARIABLES: u32 = 16;
-const RETRO_ENVIRONMENT_GET_VARIABLE: u32 = 17;
-const RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE: u32 = 18;
-const RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY: u32 = 9;
+const RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME: u32 = 18;
 const RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY: u32 = 31;
 
 // Pixel format
-const RETRO_PIXEL_FORMAT_XRGB8888: u32 = 0;
-const RETRO_PIXEL_FORMAT_RGB565: u32 = 1;
+const RETRO_PIXEL_FORMAT_XRGB8888: u32 = 1;
 
 // Memory types
 const RETRO_MEMORY_SAVE_RAM: u32 = 0;
 const RETRO_MEMORY_SYSTEM_RAM: u32 = 2;
+
+const SERIALIZATION_BUFFER_SIZE: usize = 1024 * 1024;
+const SERIALIZATION_HEADER_SIZE: usize = 12;
+const SERIALIZATION_MAGIC: &[u8; 4] = b"WQXS";
+const SERIALIZATION_FORMAT_VERSION: u8 = 1;
 
 // Joypad constants
 const RETRO_DEVICE_JOYPAD: u32 = 1;
@@ -94,8 +99,13 @@ type RetroAudioSampleBatchT =
 type RetroInputPollT = Option<unsafe extern "C" fn()>;
 type RetroInputStateT =
     Option<unsafe extern "C" fn(port: u32, device: u32, index: u32, id: u32) -> i16>;
-type RetroKeyboardCallbackT =
+type RetroKeyboardEventT =
     Option<unsafe extern "C" fn(down: bool, keycode: u32, character: u32, key_modifiers: u16)>;
+
+#[repr(C)]
+struct RetroKeyboardCallback {
+    callback: RetroKeyboardEventT,
+}
 
 #[repr(C)]
 struct RetroSystemInfo {
@@ -151,6 +161,12 @@ struct RetroInputDescriptor {
     description: *const c_char,
 }
 
+#[repr(C)]
+struct RetroMessage {
+    msg: *const c_char,
+    frames: u32,
+}
+
 // ============================================================
 // Global state
 // ============================================================
@@ -162,9 +178,9 @@ static mut AUDIO_CB: RetroAudioSampleT = None;
 static mut AUDIO_BATCH_CB: RetroAudioSampleBatchT = None;
 static mut INPUT_POLL_CB: RetroInputPollT = None;
 static mut INPUT_STATE_CB: RetroInputStateT = None;
-static mut KEYBOARD_CB: RetroKeyboardCallbackT = None;
 static mut SYSTEM_DIR: Option<String> = None;
 static mut SAVE_DIR: Option<String> = None;
+static mut PERSISTENT_STATE_PATH: Option<PathBuf> = None;
 
 // ============================================================
 // Helper functions
@@ -182,62 +198,250 @@ unsafe fn environment(cmd: u32, data: *mut c_void) -> bool {
     ENV_CB.map(|cb| cb(cmd, data)).unwrap_or(false)
 }
 
-/// Map RetroArch keyboard keycode to NC1020 key ID
-fn map_keyboard_key(keycode: u32) -> Option<u8> {
-    match keycode {
-        RETROK_RETURN => Some(key_ids::ENTER),
-        RETROK_ESCAPE => Some(key_ids::ESC),
-        RETROK_SPACE => Some(key_ids::SPACE),
-        RETROK_BACKSPACE => Some(key_ids::BACKSPACE),
-        RETROK_UP => Some(key_ids::UP),
-        RETROK_DOWN => Some(key_ids::DOWN),
-        RETROK_LEFT => Some(key_ids::LEFT),
-        RETROK_RIGHT => Some(key_ids::RIGHT),
-        RETROK_PAGEUP => Some(key_ids::PAGE_UP),
-        RETROK_PAGEDOWN => Some(key_ids::PAGE_DOWN),
-        RETROK_DELETE => Some(key_ids::POWER),
-        // F keys
-        282 => Some(key_ids::F1),  // F1
-        283 => Some(key_ids::F2),  // F2
-        284 => Some(key_ids::F3),  // F3
-        285 => Some(key_ids::F4),  // F4
-        286 => Some(key_ids::F5),  // F5
-        287 => Some(key_ids::F6),  // F6
-        288 => Some(key_ids::F7),  // F7
-        289 => Some(key_ids::F8),  // F8
-        290 => Some(key_ids::F9),  // F9
-        291 => Some(key_ids::F10), // F10
-        292 => Some(key_ids::F11), // F11
-        // Letters
-        k if k >= RETROK_A && k <= RETROK_Z => {
-            let letter_idx = (k - RETROK_A) as u8;
-            Some(0x10 + letter_idx) // Map to NC1020 key matrix
+fn firmware_files_for_model(system_dir: &Path, model: MachineModel) -> wqxemu_core::RomFiles {
+    let model_dir = system_dir.join("WQXEmu").join(model.name());
+    match model {
+        MachineModel::Nc1020 => wqxemu_core::RomFiles::new(
+            Some(model_dir.join("obj_lu.bin")),
+            Some(model_dir.join("nc1020.fls")),
+            None,
+            None,
+        ),
+        MachineModel::Pc1000 => wqxemu_core::RomFiles::new(
+            Some(model_dir.join("pc1000.rom")),
+            Some(model_dir.join("pc1000.fls")),
+            None,
+            None,
+        ),
+        MachineModel::Cc800 => wqxemu_core::RomFiles::new(
+            Some(model_dir.join("obj.bin")),
+            Some(model_dir.join("cc800.fls")),
+            None,
+            None,
+        ),
+        MachineModel::Nc2000 => wqxemu_core::RomFiles::new(
+            None,
+            Some(model_dir.join("nc2000.nor")),
+            Some(model_dir.join("nc2000.nand")),
+            Some(model_dir.join("nc2000.nand0")),
+        ),
+        MachineModel::Nc3000 => {
+            let nand0 = model_dir.join("nc3000.nand0");
+            wqxemu_core::RomFiles::new(
+                None,
+                Some(model_dir.join("nc3000.nor")),
+                Some(model_dir.join("nc3000.nand")),
+                nand0.is_file().then_some(nand0),
+            )
         }
-        // Numbers
-        k if k >= RETROK_0 && k <= RETROK_9 => {
-            let num_idx = (k - RETROK_0) as u8;
-            Some(0x20 + num_idx) // Map to NC1020 key matrix
-        }
-        _ => None,
     }
 }
 
-/// Map RetroPad button to NC1020 key ID
-fn map_joypad_button(button: u32) -> Option<u8> {
-    match button {
-        RETRO_DEVICE_ID_JOYPAD_UP => Some(key_ids::UP),
-        RETRO_DEVICE_ID_JOYPAD_DOWN => Some(key_ids::DOWN),
-        RETRO_DEVICE_ID_JOYPAD_LEFT => Some(key_ids::LEFT),
-        RETRO_DEVICE_ID_JOYPAD_RIGHT => Some(key_ids::RIGHT),
-        RETRO_DEVICE_ID_JOYPAD_A => Some(key_ids::ENTER),
-        RETRO_DEVICE_ID_JOYPAD_B => Some(key_ids::ESC),
-        RETRO_DEVICE_ID_JOYPAD_X => Some(key_ids::F1),
-        RETRO_DEVICE_ID_JOYPAD_Y => Some(key_ids::F4),
-        RETRO_DEVICE_ID_JOYPAD_L => Some(key_ids::PAGE_UP),
-        RETRO_DEVICE_ID_JOYPAD_R => Some(key_ids::PAGE_DOWN),
-        RETRO_DEVICE_ID_JOYPAD_START => Some(key_ids::F10),
-        RETRO_DEVICE_ID_JOYPAD_SELECT => Some(key_ids::F11),
-        _ => None,
+fn missing_required_firmware(files: &wqxemu_core::RomFiles) -> Vec<&Path> {
+    [&files.rom, &files.nor, &files.nand, &files.nand0]
+        .into_iter()
+        .flatten()
+        .map(PathBuf::as_path)
+        .filter(|path| !path.is_file())
+        .collect()
+}
+
+fn model_from_option(value: &str) -> Option<MachineModel> {
+    MachineModel::from_name(value)
+}
+
+unsafe fn selected_model() -> MachineModel {
+    let mut variable = RetroVariable {
+        key: c"wqxemu_model".as_ptr(),
+        value: ptr::null(),
+    };
+    if environment(
+        RETRO_ENVIRONMENT_GET_VARIABLE,
+        &mut variable as *mut RetroVariable as *mut c_void,
+    ) && !variable.value.is_null()
+    {
+        if let Some(model) = CStr::from_ptr(variable.value)
+            .to_str()
+            .ok()
+            .and_then(model_from_option)
+        {
+            return model;
+        }
+    }
+    MachineModel::Nc1020
+}
+
+unsafe fn report_error(message: &str) {
+    log::error!("{message}");
+    let Ok(message) = CString::new(message) else {
+        return;
+    };
+    let mut retro_message = RetroMessage {
+        msg: message.as_ptr(),
+        frames: 300,
+    };
+    environment(
+        RETRO_ENVIRONMENT_SET_MESSAGE,
+        &mut retro_message as *mut RetroMessage as *mut c_void,
+    );
+}
+
+unsafe fn request_pixel_format() -> bool {
+    let mut pixel_format = RETRO_PIXEL_FORMAT_XRGB8888;
+    if environment(
+        RETRO_ENVIRONMENT_SET_PIXEL_FORMAT,
+        &mut pixel_format as *mut u32 as *mut c_void,
+    ) {
+        true
+    } else {
+        report_error("The frontend does not support the required XRGB8888 pixel format");
+        false
+    }
+}
+
+fn persistent_state_path(
+    save_dir: &Path,
+    model: MachineModel,
+    firmware_fingerprint: u64,
+) -> PathBuf {
+    save_dir
+        .join(model.name())
+        .join(format!("{firmware_fingerprint:016x}.wqxs"))
+}
+
+unsafe fn persist_active_emulator() {
+    let (Some(emulator), Some(path)) = (EMULATOR.as_ref(), PERSISTENT_STATE_PATH.as_deref()) else {
+        return;
+    };
+    let result = emulator
+        .save_persistent_state()
+        .and_then(|state| write_persistent_state_file(path, &state));
+    match result {
+        Ok(()) => log::info!("Persistent state saved to {}", path.display()),
+        Err(error) => report_error(&format!(
+            "Failed to save persistent state {}: {error}",
+            path.display()
+        )),
+    }
+}
+
+fn machine_model_tag(model: MachineModel) -> u8 {
+    match model {
+        MachineModel::Nc1020 => 0,
+        MachineModel::Pc1000 => 1,
+        MachineModel::Cc800 => 2,
+        MachineModel::Nc2000 => 3,
+        MachineModel::Nc3000 => 4,
+    }
+}
+
+fn write_serialized_state(model: MachineModel, payload: &[u8], output: &mut [u8]) -> bool {
+    let Ok(payload_size) = u32::try_from(payload.len()) else {
+        return false;
+    };
+    let Some(required_size) = SERIALIZATION_HEADER_SIZE.checked_add(payload.len()) else {
+        return false;
+    };
+    if required_size > output.len() {
+        return false;
+    }
+
+    output.fill(0);
+    output[..4].copy_from_slice(SERIALIZATION_MAGIC);
+    output[4] = SERIALIZATION_FORMAT_VERSION;
+    output[5] = machine_model_tag(model);
+    output[8..SERIALIZATION_HEADER_SIZE].copy_from_slice(&payload_size.to_le_bytes());
+    output[SERIALIZATION_HEADER_SIZE..required_size].copy_from_slice(payload);
+    true
+}
+
+fn serialized_state_payload(model: MachineModel, data: &[u8]) -> Option<&[u8]> {
+    if data.len() < SERIALIZATION_HEADER_SIZE
+        || &data[..4] != SERIALIZATION_MAGIC
+        || data[4] != SERIALIZATION_FORMAT_VERSION
+        || data[5] != machine_model_tag(model)
+    {
+        return None;
+    }
+
+    let payload_size = u32::from_le_bytes(data[8..SERIALIZATION_HEADER_SIZE].try_into().ok()?);
+    let payload_size = usize::try_from(payload_size).ok()?;
+    let end = SERIALIZATION_HEADER_SIZE.checked_add(payload_size)?;
+    data.get(SERIALIZATION_HEADER_SIZE..end)
+}
+
+fn key_id_for_token(model: MachineModel, token: &str) -> Option<u8> {
+    layout_for(model)
+        .iter()
+        .find(|key| {
+            key.label
+                .split('/')
+                .chain(key.hint.split('/'))
+                .any(|alias| alias == token)
+        })
+        .map(|key| key_id_for(model, key.row, key.col))
+}
+
+/// Map a RetroArch keyboard keycode to the active model's keypad matrix.
+fn map_keyboard_key(model: MachineModel, keycode: u32) -> Option<u8> {
+    let token = match keycode {
+        RETROK_RETURN => "ENT".to_owned(),
+        RETROK_ESCAPE => "ESC".to_owned(),
+        RETROK_SPACE => "SPC".to_owned(),
+        RETROK_BACKSPACE => "F2".to_owned(),
+        RETROK_UP => "UP".to_owned(),
+        RETROK_DOWN => "DN".to_owned(),
+        RETROK_LEFT => "LT".to_owned(),
+        RETROK_RIGHT => "RT".to_owned(),
+        RETROK_PAGEUP => "PGUP".to_owned(),
+        RETROK_PAGEDOWN => "PGDN".to_owned(),
+        RETROK_DELETE if model == MachineModel::Nc1020 => "DEL".to_owned(),
+        RETROK_DELETE => "F12".to_owned(),
+        key if (RETROK_F1..=RETROK_F12).contains(&key) => {
+            format!("F{}", key - RETROK_F1 + 1)
+        }
+        key if (RETROK_A..=RETROK_Z).contains(&key) => char::from_u32(key)
+            .unwrap()
+            .to_ascii_uppercase()
+            .to_string(),
+        key if (RETROK_0..=RETROK_9).contains(&key) => char::from_u32(key).unwrap().to_string(),
+        _ => return None,
+    };
+
+    key_id_for_token(model, &token)
+}
+
+/// Map a RetroPad button to the active model's keypad matrix.
+fn map_joypad_button(model: MachineModel, button: u32) -> Option<u8> {
+    let token = match button {
+        RETRO_DEVICE_ID_JOYPAD_UP => "UP",
+        RETRO_DEVICE_ID_JOYPAD_DOWN => "DN",
+        RETRO_DEVICE_ID_JOYPAD_LEFT => "LT",
+        RETRO_DEVICE_ID_JOYPAD_RIGHT => "RT",
+        RETRO_DEVICE_ID_JOYPAD_A => "ENT",
+        RETRO_DEVICE_ID_JOYPAD_B => "ESC",
+        RETRO_DEVICE_ID_JOYPAD_X => "F1",
+        RETRO_DEVICE_ID_JOYPAD_Y => "F4",
+        RETRO_DEVICE_ID_JOYPAD_L => "PGUP",
+        RETRO_DEVICE_ID_JOYPAD_R => "PGDN",
+        RETRO_DEVICE_ID_JOYPAD_START => "F10",
+        RETRO_DEVICE_ID_JOYPAD_SELECT => "F11",
+        _ => return None,
+    };
+
+    key_id_for_token(model, token)
+}
+
+unsafe extern "C" fn keyboard_event(
+    down: bool,
+    keycode: u32,
+    _character: u32,
+    _key_modifiers: u16,
+) {
+    if let Some(emulator) = EMULATOR.as_mut() {
+        if let Some(key_id) = map_keyboard_key(emulator.model(), keycode) {
+            emulator.set_key(key_id, down);
+        }
     }
 }
 
@@ -255,6 +459,22 @@ pub extern "C" fn retro_set_environment(cb: RetroEnvironmentT) {
     set_input_descriptors();
     // Set core variables
     set_core_variables();
+    let mut supports_no_game = true;
+    unsafe {
+        environment(
+            RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME,
+            &mut supports_no_game as *mut bool as *mut c_void,
+        );
+    }
+    let mut keyboard_callback = RetroKeyboardCallback {
+        callback: Some(keyboard_event),
+    };
+    unsafe {
+        environment(
+            RETRO_ENVIRONMENT_SET_KEYBOARD_CALLBACK,
+            &mut keyboard_callback as *mut RetroKeyboardCallback as *mut c_void,
+        );
+    }
 }
 
 /// Set video refresh callback
@@ -297,14 +517,6 @@ pub extern "C" fn retro_set_input_state(cb: RetroInputStateT) {
     }
 }
 
-/// Set keyboard callback
-#[no_mangle]
-pub extern "C" fn retro_set_keyboard_callback(cb: RetroKeyboardCallbackT) {
-    unsafe {
-        KEYBOARD_CB = cb;
-    }
-}
-
 /// Return API version
 #[no_mangle]
 pub extern "C" fn retro_api_version() -> u32 {
@@ -316,6 +528,9 @@ pub extern "C" fn retro_api_version() -> u32 {
 pub extern "C" fn retro_init() {
     unsafe {
         // Get system directory
+        SYSTEM_DIR = None;
+        SAVE_DIR = None;
+        PERSISTENT_STATE_PATH = None;
         let mut sys_dir: *const c_char = ptr::null();
         if environment(
             RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY,
@@ -325,7 +540,6 @@ pub extern "C" fn retro_init() {
             SYSTEM_DIR = Some(CStr::from_ptr(sys_dir).to_string_lossy().into_owned());
         }
 
-        // Get save directory
         let mut save_dir: *const c_char = ptr::null();
         if environment(
             RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY,
@@ -334,13 +548,6 @@ pub extern "C" fn retro_init() {
         {
             SAVE_DIR = Some(CStr::from_ptr(save_dir).to_string_lossy().into_owned());
         }
-
-        // Set pixel format to XRGB8888
-        let mut pixel_format = RETRO_PIXEL_FORMAT_XRGB8888;
-        environment(
-            RETRO_ENVIRONMENT_SET_PIXEL_FORMAT,
-            &mut pixel_format as *mut u32 as *mut c_void,
-        );
     }
     log::info!("WQXEmu libretro core initialized");
 }
@@ -349,7 +556,11 @@ pub extern "C" fn retro_init() {
 #[no_mangle]
 pub extern "C" fn retro_deinit() {
     unsafe {
+        persist_active_emulator();
         EMULATOR = None;
+        SYSTEM_DIR = None;
+        SAVE_DIR = None;
+        PERSISTENT_STATE_PATH = None;
     }
     log::info!("WQXEmu libretro core deinitialized");
 }
@@ -361,9 +572,9 @@ pub extern "C" fn retro_get_system_info(info: *mut RetroSystemInfo) {
         (*info) = RetroSystemInfo {
             library_name: c"WQXEmu".as_ptr(),
             library_version: c"0.1.0".as_ptr(),
-            valid_extensions: c"bin|rom|fls".as_ptr(),
-            need_fullpath: true,
-            block_extract: true,
+            valid_extensions: c"".as_ptr(),
+            need_fullpath: false,
+            block_extract: false,
         };
     }
 }
@@ -395,95 +606,83 @@ pub extern "C" fn retro_get_system_av_info(info: *mut RetroSystemAvInfo) {
 /// Set controller port device
 #[no_mangle]
 pub extern "C" fn retro_set_controller_port_device(_port: u32, _device: u32) {
-    // NC1020 only supports basic input
+    // WQXEmu uses the standard RetroPad on port 0.
 }
 
-/// Load a game
+/// Start the selected machine without content.
 #[no_mangle]
 pub extern "C" fn retro_load_game(info: *const RetroGameInfo) -> bool {
     unsafe {
-        let game_info = &*info;
-
-        // Check if path is valid
-        if game_info.path.is_null() {
-            log::error!("Game path is null");
+        if !info.is_null() {
+            report_error("WQXEmu does not load firmware as content");
+            return false;
+        }
+        if !request_pixel_format() {
             return false;
         }
 
-        let path = match CStr::from_ptr(game_info.path).to_str() {
-            Ok(p) => p,
-            Err(e) => {
-                log::error!("Invalid game path: {}", e);
+        let Some(system_dir) = SYSTEM_DIR.as_deref() else {
+            report_error("RetroArch system directory is not configured");
+            return false;
+        };
+        let model = selected_model();
+        let files = firmware_files_for_model(Path::new(system_dir), model);
+        let missing = missing_required_firmware(&files);
+        if !missing.is_empty() {
+            let paths = missing
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            report_error(&format!(
+                "Missing {} firmware in the RetroArch system directory: {paths}",
+                model.name()
+            ));
+            return false;
+        }
+
+        let firmware_fingerprint = match files.fingerprint() {
+            Ok(fingerprint) => fingerprint,
+            Err(error) => {
+                report_error(&format!(
+                    "Failed to identify {} firmware: {error}",
+                    model.name()
+                ));
                 return false;
             }
         };
 
-        // Assemble ROM / Flash files. The loaded file is classified by
-        // extension; sibling files with the same stem are picked up too
-        // (e.g. loading `nc2000.nand` finds `nc2000.nor`/`nc2000.nand0`).
-        let game_path = Path::new(path);
-        let stem = game_path
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned());
-        let ext = game_path
-            .extension()
-            .map(|e| e.to_string_lossy().to_ascii_lowercase());
-        let parent = game_path
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_default();
-
-        let mut files = wqxemu_core::RomFiles::new(None, None, None, None);
-        match ext.as_deref() {
-            Some("nand") => files.nand = Some(game_path.to_path_buf()),
-            Some("nand0") => files.nand0 = Some(game_path.to_path_buf()),
-            Some("fls") | Some("nor") => files.nor = Some(game_path.to_path_buf()),
-            _ => files.rom = Some(game_path.to_path_buf()),
-        }
-
-        if files.nor.is_none() {
-            if let Some(stem) = &stem {
-                for ext in ["fls", "nor"] {
-                    let candidate = parent.join(format!("{}.{}", stem, ext));
-                    if candidate.exists() {
-                        files.nor = Some(candidate);
-                        break;
-                    }
-                }
-            }
-        }
-        if files.nand.is_none() {
-            if let Some(stem) = &stem {
-                let candidate = parent.join(format!("{}.nand", stem));
-                if candidate.exists() {
-                    files.nand = Some(candidate);
-                }
-            }
-        }
-        if files.nand0.is_none() {
-            if let Some(stem) = &stem {
-                let candidate = parent.join(format!("{}.nand0", stem));
-                if candidate.exists() {
-                    files.nand0 = Some(candidate);
-                }
-            }
-        }
-
-        let model = wqxemu_core::detect_model(&files);
-        log::info!("Detected model: {}", model.name());
-
         let mut emu = match Emulator::new(model, &files) {
             Ok(e) => e,
             Err(e) => {
-                log::error!("Failed to create emulator: {}", e);
+                report_error(&format!("Failed to start {}: {e}", model.name()));
                 return false;
             }
         };
 
         emu.reset();
+        let persistent_path = SAVE_DIR
+            .as_deref()
+            .map(Path::new)
+            .map(|save_dir| persistent_state_path(save_dir, model, firmware_fingerprint));
+        if let Some(path) = persistent_path.as_deref().filter(|path| path.is_file()) {
+            match read_persistent_state_file(path)
+                .and_then(|state| emu.load_persistent_state(&state))
+            {
+                Ok(()) => log::info!("Persistent state loaded from {}", path.display()),
+                Err(error) => report_error(&format!(
+                    "Ignoring invalid persistent state {}: {error}",
+                    path.display()
+                )),
+            }
+        }
+        PERSISTENT_STATE_PATH = persistent_path;
         EMULATOR = Some(emu);
 
-        log::info!("Game loaded: {}", path);
+        log::info!(
+            "Started {} from the RetroArch system directory",
+            model.name()
+        );
         true
     }
 }
@@ -492,17 +691,32 @@ pub extern "C" fn retro_load_game(info: *const RetroGameInfo) -> bool {
 #[no_mangle]
 pub extern "C" fn retro_unload_game() {
     unsafe {
-        // Save NOR before unloading
-        if let Some(ref emu) = EMULATOR {
-            if let Some(ref save_dir) = SAVE_DIR {
-                let nor_path = std::path::Path::new(save_dir).join("nc1020.fls");
-                if let Err(e) = emu.save_nor(&nor_path.to_string_lossy()) {
-                    log::warn!("Failed to save NOR: {}", e);
-                }
-            }
-        }
+        persist_active_emulator();
         EMULATOR = None;
+        PERSISTENT_STATE_PATH = None;
     }
+}
+
+/// Reset active cheat codes.
+#[no_mangle]
+pub extern "C" fn retro_cheat_reset() {
+    // Cheats are not supported by this core.
+}
+
+/// Add or update a cheat code.
+#[no_mangle]
+pub extern "C" fn retro_cheat_set(_index: u32, _enabled: bool, _code: *const c_char) {
+    // Cheats are not supported by this core.
+}
+
+/// Load content through a libretro subsystem.
+#[no_mangle]
+pub extern "C" fn retro_load_game_special(
+    _game_type: u32,
+    _info: *const RetroGameInfo,
+    _num_info: usize,
+) -> bool {
+    false
 }
 
 /// Run one frame
@@ -519,16 +733,10 @@ pub extern "C" fn retro_run() {
             // Check all joypad buttons
             for button in 0..12 {
                 let state = get_state(0, RETRO_DEVICE_JOYPAD, 0, button);
-                if let Some(key_id) = map_joypad_button(button) {
+                if let Some(key_id) = map_joypad_button(emu.model(), button) {
                     emu.set_key(key_id, state != 0);
                 }
             }
-        }
-
-        // Process keyboard input
-        if let Some(ref mut emu) = EMULATOR {
-            // Note: Keyboard callback handling would go here
-            // For now, we rely on joypad mapping
         }
 
         // Run one frame
@@ -562,6 +770,9 @@ pub extern "C" fn retro_run() {
 #[no_mangle]
 pub extern "C" fn retro_serialize(data: *mut c_void, size: usize) -> bool {
     unsafe {
+        if data.is_null() {
+            return false;
+        }
         let emu = match EMULATOR.as_ref() {
             Some(e) => e,
             None => return false,
@@ -576,16 +787,15 @@ pub extern "C" fn retro_serialize(data: *mut c_void, size: usize) -> bool {
             }
         };
 
-        if bytes.len() > size {
+        let output = std::slice::from_raw_parts_mut(data as *mut u8, size);
+        if !write_serialized_state(emu.model(), &bytes, output) {
             log::error!(
-                "Save state too large: {} bytes needed, {} available",
+                "Save state too large: {} payload bytes, {} total bytes available",
                 bytes.len(),
                 size
             );
             return false;
         }
-
-        ptr::copy_nonoverlapping(bytes.as_ptr(), data as *mut u8, bytes.len());
         true
     }
 }
@@ -594,13 +804,20 @@ pub extern "C" fn retro_serialize(data: *mut c_void, size: usize) -> bool {
 #[no_mangle]
 pub extern "C" fn retro_unserialize(data: *const c_void, size: usize) -> bool {
     unsafe {
+        if data.is_null() {
+            return false;
+        }
         let emu = match EMULATOR.as_mut() {
             Some(e) => e,
             None => return false,
         };
 
         let bytes = std::slice::from_raw_parts(data as *const u8, size);
-        let state = match wqxemu_core::save::SaveState::deserialize(bytes) {
+        let Some(payload) = serialized_state_payload(emu.model(), bytes) else {
+            log::error!("Invalid save state envelope");
+            return false;
+        };
+        let state = match wqxemu_core::save::SaveState::deserialize(payload) {
             Ok(s) => s,
             Err(e) => {
                 log::error!("Failed to deserialize: {}", e);
@@ -620,46 +837,21 @@ pub extern "C" fn retro_unserialize(data: *const c_void, size: usize) -> bool {
 /// Get save state size
 #[no_mangle]
 pub extern "C" fn retro_serialize_size() -> usize {
-    // Return a generous size estimate
-    1024 * 1024 // 1MB should be more than enough
+    SERIALIZATION_BUFFER_SIZE
 }
 
 /// Get memory data
 #[no_mangle]
 pub extern "C" fn retro_get_memory_data(id: u32) -> *mut c_void {
-    unsafe {
-        match id {
-            RETRO_MEMORY_SAVE_RAM => {
-                // Return NOR Flash as save RAM
-                if let Some(ref emu) = EMULATOR {
-                    // NOR data is private, we'd need to expose it
-                    ptr::null_mut()
-                } else {
-                    ptr::null_mut()
-                }
-            }
-            RETRO_MEMORY_SYSTEM_RAM => {
-                // Return system RAM
-                if let Some(ref mut emu) = EMULATOR {
-                    // RAM is private, we'd need to expose it
-                    ptr::null_mut()
-                } else {
-                    ptr::null_mut()
-                }
-            }
-            _ => ptr::null_mut(),
-        }
-    }
+    let _ = id;
+    ptr::null_mut()
 }
 
 /// Get memory size
 #[no_mangle]
 pub extern "C" fn retro_get_memory_size(id: u32) -> usize {
-    match id {
-        RETRO_MEMORY_SAVE_RAM => 1024 * 1024, // NOR Flash size
-        RETRO_MEMORY_SYSTEM_RAM => 32 * 1024, // RAM size
-        _ => 0,
-    }
+    let _ = id;
+    0
 }
 
 /// Reset the core
@@ -683,13 +875,312 @@ pub extern "C" fn retro_get_region() -> u32 {
 // ============================================================
 
 /// Set input descriptors for RetroArch
+fn joypad_descriptor(id: u32, description: &'static CStr) -> RetroInputDescriptor {
+    RetroInputDescriptor {
+        port: 0,
+        device: RETRO_DEVICE_JOYPAD,
+        index: 0,
+        id,
+        description: description.as_ptr(),
+    }
+}
+
+fn input_descriptors() -> [RetroInputDescriptor; 13] {
+    [
+        joypad_descriptor(RETRO_DEVICE_ID_JOYPAD_B, c"Escape / Back"),
+        joypad_descriptor(RETRO_DEVICE_ID_JOYPAD_Y, c"F4"),
+        joypad_descriptor(RETRO_DEVICE_ID_JOYPAD_SELECT, c"F11 / Model Hotkey"),
+        joypad_descriptor(RETRO_DEVICE_ID_JOYPAD_START, c"F10 / Model Hotkey"),
+        joypad_descriptor(RETRO_DEVICE_ID_JOYPAD_UP, c"Up"),
+        joypad_descriptor(RETRO_DEVICE_ID_JOYPAD_DOWN, c"Down"),
+        joypad_descriptor(RETRO_DEVICE_ID_JOYPAD_LEFT, c"Left"),
+        joypad_descriptor(RETRO_DEVICE_ID_JOYPAD_RIGHT, c"Right"),
+        joypad_descriptor(RETRO_DEVICE_ID_JOYPAD_A, c"Enter / Confirm"),
+        joypad_descriptor(RETRO_DEVICE_ID_JOYPAD_X, c"F1"),
+        joypad_descriptor(RETRO_DEVICE_ID_JOYPAD_L, c"Page Up"),
+        joypad_descriptor(RETRO_DEVICE_ID_JOYPAD_R, c"Page Down"),
+        RetroInputDescriptor {
+            port: 0,
+            device: 0,
+            index: 0,
+            id: 0,
+            description: ptr::null(),
+        },
+    ]
+}
+
 fn set_input_descriptors() {
-    // Input descriptors are optional but help RetroArch show proper labels
-    // We'll skip the full implementation for now
+    let descriptors = input_descriptors();
+    unsafe {
+        environment(
+            RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS,
+            descriptors.as_ptr() as *mut c_void,
+        );
+    }
 }
 
 /// Set core variables for RetroArch
 fn set_core_variables() {
-    // Core variables allow users to configure the emulator through RetroArch UI
-    // We'll skip the full implementation for now
+    let variables = [
+        RetroVariable {
+            key: c"wqxemu_model".as_ptr(),
+            value: c"Machine Model (Restart); NC1020|PC1000|CC800|NC2000|NC3000".as_ptr(),
+        },
+        RetroVariable {
+            key: ptr::null(),
+            value: ptr::null(),
+        },
+    ];
+    unsafe {
+        environment(
+            RETRO_ENVIRONMENT_SET_VARIABLES,
+            variables.as_ptr() as *mut c_void,
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn resolves_canonical_system_firmware_for_each_model() {
+        let system_dir = Path::new("system");
+        let cases = [
+            (
+                MachineModel::Nc1020,
+                Some("obj_lu.bin"),
+                "nc1020.fls",
+                None,
+                None,
+            ),
+            (
+                MachineModel::Pc1000,
+                Some("pc1000.rom"),
+                "pc1000.fls",
+                None,
+                None,
+            ),
+            (
+                MachineModel::Cc800,
+                Some("obj.bin"),
+                "cc800.fls",
+                None,
+                None,
+            ),
+            (
+                MachineModel::Nc2000,
+                None,
+                "nc2000.nor",
+                Some("nc2000.nand"),
+                Some("nc2000.nand0"),
+            ),
+            (
+                MachineModel::Nc3000,
+                None,
+                "nc3000.nor",
+                Some("nc3000.nand"),
+                None,
+            ),
+        ];
+
+        for (model, rom, nor, nand, nand0) in cases {
+            let files = firmware_files_for_model(system_dir, model);
+            let model_dir = system_dir.join("WQXEmu").join(model.name());
+            assert_eq!(files.rom, rom.map(|name| model_dir.join(name)));
+            assert_eq!(files.nor, Some(model_dir.join(nor)));
+            assert_eq!(files.nand, nand.map(|name| model_dir.join(name)));
+            assert_eq!(files.nand0, nand0.map(|name| model_dir.join(name)));
+        }
+    }
+
+    #[test]
+    fn parses_all_machine_model_option_values() {
+        for model in [
+            MachineModel::Nc1020,
+            MachineModel::Pc1000,
+            MachineModel::Cc800,
+            MachineModel::Nc2000,
+            MachineModel::Nc3000,
+        ] {
+            assert_eq!(
+                model_from_option(&model.name().to_ascii_uppercase()),
+                Some(model)
+            );
+        }
+        assert_eq!(model_from_option("Auto"), None);
+    }
+
+    #[test]
+    fn persistent_state_paths_are_isolated_by_model_and_firmware() {
+        let save_dir = Path::new("saves");
+        assert_eq!(
+            persistent_state_path(save_dir, MachineModel::Nc2000, 0x1234),
+            save_dir.join("nc2000").join("0000000000001234.wqxs")
+        );
+        assert_ne!(
+            persistent_state_path(save_dir, MachineModel::Nc2000, 0x1234),
+            persistent_state_path(save_dir, MachineModel::Nc3000, 0x1234)
+        );
+        assert_ne!(
+            persistent_state_path(save_dir, MachineModel::Nc2000, 0x1234),
+            persistent_state_path(save_dir, MachineModel::Nc2000, 0x5678)
+        );
+    }
+
+    #[test]
+    fn unavailable_memory_regions_report_zero_size() {
+        for id in [RETRO_MEMORY_SAVE_RAM, RETRO_MEMORY_SYSTEM_RAM, u32::MAX] {
+            assert!(retro_get_memory_data(id).is_null());
+            assert_eq!(retro_get_memory_size(id), 0);
+        }
+    }
+
+    #[test]
+    fn maps_navigation_to_each_models_matrix() {
+        let expectations = [
+            (MachineModel::Nc1020, 0x1a),
+            (MachineModel::Pc1000, 0x32),
+            (MachineModel::Cc800, 0x32),
+            (MachineModel::Nc2000, 0x13),
+            (MachineModel::Nc3000, 0x13),
+        ];
+
+        for (model, expected) in expectations {
+            assert_eq!(map_keyboard_key(model, RETROK_UP), Some(expected));
+            assert_eq!(
+                map_joypad_button(model, RETRO_DEVICE_ID_JOYPAD_UP),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn maps_keyboard_aliases_and_model_specific_power_keys() {
+        assert_eq!(
+            map_keyboard_key(MachineModel::Nc1020, RETROK_0 + 1),
+            Some(0x34)
+        );
+        assert_eq!(
+            map_keyboard_key(MachineModel::Pc1000, RETROK_0 + 1),
+            Some(0x1c)
+        );
+        assert_eq!(
+            map_keyboard_key(MachineModel::Nc2000, RETROK_DELETE),
+            Some(0x00)
+        );
+        assert_eq!(
+            map_keyboard_key(MachineModel::Nc1020, RETROK_DELETE),
+            Some(0x0f)
+        );
+    }
+
+    #[test]
+    fn advertises_every_mapped_retropad_button() {
+        let descriptors = input_descriptors();
+        let expected = [
+            (RETRO_DEVICE_ID_JOYPAD_B, "Escape / Back"),
+            (RETRO_DEVICE_ID_JOYPAD_Y, "F4"),
+            (RETRO_DEVICE_ID_JOYPAD_SELECT, "F11 / Model Hotkey"),
+            (RETRO_DEVICE_ID_JOYPAD_START, "F10 / Model Hotkey"),
+            (RETRO_DEVICE_ID_JOYPAD_UP, "Up"),
+            (RETRO_DEVICE_ID_JOYPAD_DOWN, "Down"),
+            (RETRO_DEVICE_ID_JOYPAD_LEFT, "Left"),
+            (RETRO_DEVICE_ID_JOYPAD_RIGHT, "Right"),
+            (RETRO_DEVICE_ID_JOYPAD_A, "Enter / Confirm"),
+            (RETRO_DEVICE_ID_JOYPAD_X, "F1"),
+            (RETRO_DEVICE_ID_JOYPAD_L, "Page Up"),
+            (RETRO_DEVICE_ID_JOYPAD_R, "Page Down"),
+        ];
+
+        for (descriptor, (id, description)) in descriptors.iter().zip(expected) {
+            assert_eq!(descriptor.port, 0);
+            assert_eq!(descriptor.device, RETRO_DEVICE_JOYPAD);
+            assert_eq!(descriptor.index, 0);
+            assert_eq!(descriptor.id, id);
+            assert_eq!(
+                unsafe { CStr::from_ptr(descriptor.description) }
+                    .to_str()
+                    .unwrap(),
+                description
+            );
+        }
+        assert!(descriptors.last().unwrap().description.is_null());
+    }
+
+    #[test]
+    fn serialization_envelope_ignores_fixed_buffer_padding() {
+        let payload = b"serialized state";
+        let mut buffer = vec![0xaa; 128];
+
+        assert!(write_serialized_state(
+            MachineModel::Pc1000,
+            payload,
+            &mut buffer
+        ));
+        assert_eq!(
+            serialized_state_payload(MachineModel::Pc1000, &buffer),
+            Some(payload.as_slice())
+        );
+        assert!(buffer[SERIALIZATION_HEADER_SIZE + payload.len()..]
+            .iter()
+            .all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn serialization_envelope_rejects_invalid_lengths() {
+        let mut buffer = [0u8; 16];
+        assert!(!write_serialized_state(
+            MachineModel::Nc1020,
+            &[0u8; 9],
+            &mut buffer
+        ));
+        assert_eq!(
+            serialized_state_payload(MachineModel::Nc1020, &buffer),
+            None
+        );
+
+        buffer[..4].copy_from_slice(SERIALIZATION_MAGIC);
+        buffer[4] = SERIALIZATION_FORMAT_VERSION;
+        buffer[5] = machine_model_tag(MachineModel::Nc1020);
+        buffer[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(
+            serialized_state_payload(MachineModel::Nc1020, &buffer),
+            None
+        );
+    }
+
+    #[test]
+    fn serialization_envelope_round_trips_an_emulator_state() {
+        let emulator =
+            Emulator::new(MachineModel::Nc1020, &wqxemu_core::RomFiles::default()).unwrap();
+        let bytes = emulator.save_state().serialize().unwrap();
+        let mut buffer = vec![0u8; SERIALIZATION_BUFFER_SIZE];
+
+        assert!(write_serialized_state(
+            MachineModel::Nc1020,
+            &bytes,
+            &mut buffer
+        ));
+        let restored = wqxemu_core::save::SaveState::deserialize(
+            serialized_state_payload(MachineModel::Nc1020, &buffer).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(restored.version, emulator.save_state().version);
+    }
+
+    #[test]
+    fn serialization_envelope_rejects_another_model() {
+        let mut buffer = [0u8; 32];
+        assert!(write_serialized_state(
+            MachineModel::Nc2000,
+            b"state",
+            &mut buffer
+        ));
+
+        assert_eq!(
+            serialized_state_payload(MachineModel::Nc3000, &buffer),
+            None
+        );
+    }
 }

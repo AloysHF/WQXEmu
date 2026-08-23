@@ -55,7 +55,10 @@ See the [Standalone Emulator](docs/Standalone-Emulator.md) guide for installatio
 
 ### RetroArch Mode
 
-Install the core and load a game through RetroArch's **Load Content** menu.
+Install the core, place the firmware set under RetroArch's `system/WQXEmu/<model>/`
+directory, select the machine in **Core Options**, and use **Start Core**. Firmware
+is system data rather than game content, so the core intentionally does not accept
+files through **Load Content**.
 
 See the [RetroArch Core](docs/RetroArch-Core.md) guide for installation, supported platforms, RetroPad mapping, and features.
 

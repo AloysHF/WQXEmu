@@ -40,30 +40,35 @@ The compiled core will be at:
 - iOS (arm64)
 - webOS
 
-## Loading Content
+## Starting a Machine
 
-### Automatic Model Detection
+WQXEmu is a low-level emulator that boots original hardware firmware. The firmware
+is system data, not game content, so the core starts without content and does not
+accept ROM, NOR, or NAND files through **Load Content**.
 
-The core automatically detects the model based on the loaded firmware files:
+1. Install the required files in RetroArch's system directory using the exact paths below
+2. Select **Load Core → WQXEmu**
+3. Select **Start Core**; the initial default is NC1020
+4. To use another model, open **Quick Menu → Core Options → Machine Model** while the core is running
+5. Select **Quick Menu → Close Content**, then **Start Core** again
 
-1. Open RetroArch
-2. Select **Load Core** → **WQXEmu**
-3. Select **Load Content** and choose a firmware file
-4. The core will automatically detect the model and load required firmware files
+The selected model is applied when the core starts, so changing it always requires
+closing and starting the core again.
 
 ### Firmware File Requirements
 
-| Model | Required firmware | File types |
-|-------|-------------------|------------|
-| NC1020 | ROM + NOR | `.bin`, `.fls` |
-| PC1000 | ROM + NOR | `.rom`, `.fls` |
-| CC800 | ROM + NOR | `.bin`, `.fls` |
-| NC2000 | NOR + NAND + NAND0 | `.nor`, `.nand`, `.nand0` |
-| NC3000 | NOR + NAND | `.nor`, `.nand` |
+| Model | Required files | Optional files |
+|-------|----------------|----------------|
+| NC1020 | `obj_lu.bin`, `nc1020.fls` | — |
+| PC1000 | `pc1000.rom`, `pc1000.fls` | — |
+| CC800 | `obj.bin`, `cc800.fls` | — |
+| NC2000 | `nc2000.nor`, `nc2000.nand`, `nc2000.nand0` | — |
+| NC3000 | `nc3000.nor`, `nc3000.nand` | `nc3000.nand0` |
 
 ### Firmware File Placement
 
-Place firmware files in RetroArch's `system/` directory:
+The paths and filenames are fixed relative to the system directory configured in
+RetroArch. Only the files for the selected model are required:
 
 ```
 system/
@@ -83,8 +88,14 @@ system/
     │   └── nc2000.nand0
     └── nc3000/
         ├── nc3000.nor
-        └── nc3000.nand
+        ├── nc3000.nand
+        └── nc3000.nand0    # Optional
 ```
+
+RetroArch's core information page lists the firmware for all five models. Those
+entries are conditional: a complete set is required only for the model selected in
+Core Options. The core validates the selected set at startup and reports every
+missing path.
 
 ## RetroPad Button Mapping
 
@@ -96,107 +107,38 @@ system/
 | D-Pad Right | Right | Navigate right |
 | A | Enter | Confirm |
 | B | Escape | Back / Cancel |
-| X | — | — |
-| Y | — | — |
-| L1 | — | — |
-| R1 | — | — |
+| X | F1 | Function key 1 |
+| Y | F4 | Function key 4 |
+| L1 | Page Up | Previous page |
+| R1 | Page Down | Next page |
 | L2 | — | — |
 | R2 | — | — |
-| Select | — | — |
-| Start | — | — |
+| Select | F11 | Model-specific hotkey |
+| Start | F10 | Model-specific hotkey |
 
 ## Core Options
 
-Core options can be configured from RetroArch's **Quick Menu → Core Options**.
+**Machine Model** selects NC1020, PC1000, CC800, NC2000, or NC3000. NC1020 is the
+default, and a running machine must be restarted after this option changes.
 
-### Display Options
+Display scaling, audio volume, input bindings, and logging continue to use
+RetroArch's frontend settings.
 
-#### LCD Scale
+## Persistent Device State
 
-- **Description**: Scale factor for the LCD display
-- **Values**: 1x, 2x, 3x, 4x (default)
-- **Effect**: Changes the size of the LCD display
+The core keeps the source firmware files in the system directory read-only. On a
+normal content unload or core shutdown, it writes the complete writable device
+state to:
 
-#### Show Grid Lines
+```
+<RetroArch save directory>/<model>/<firmware fingerprint>.wqxs
+```
 
-- **Description**: Show grid lines on the LCD
-- **Values**: Off, On (default)
-- **Effect**: Shows or hides grid lines on the LCD
-
-#### Ghosting Effect
-
-- **Description**: Enable/disable LCD ghosting effect
-- **Values**: Off, On (default)
-- **Effect**: Enables or disables the LCD ghosting effect
-
-### Audio Options
-
-#### Audio Volume
-
-- **Description**: Master audio volume
-- **Values**: 0-100 (default: 100)
-- **Effect**: Adjusts the overall audio volume
-
-#### Audio Sample Rate
-
-- **Description**: Audio sample rate
-- **Values**: 22050, 44100, 48000 (default)
-- **Effect**: Changes the audio sample rate
-
-### Input Options
-
-#### Key Repeat Delay
-
-- **Description**: Delay before key repeat starts
-- **Values**: 100-1000 ms (default: 500)
-- **Effect**: Adjusts the delay before key repeat starts
-
-#### Key Repeat Interval
-
-- **Description**: Interval between key repeats
-- **Values**: 50-500 ms (default: 100)
-- **Effect**: Adjusts the interval between key repeats
-
-### Emulation Options
-
-#### CPU Speed
-
-- **Description**: CPU speed multiplier
-- **Values**: 0.5x, 1x (default), 2x, 4x
-- **Effect**: Adjusts the CPU speed
-
-#### Timer Speed
-
-- **Description**: Timer speed multiplier
-- **Values**: 0.5x, 1x (default), 2x, 4x
-- **Effect**: Adjusts the timer speed
-
-### Debug Options
-
-#### CPU Trace
-
-- **Description**: Enable CPU instruction tracing
-- **Values**: Off (default), On
-- **Effect**: Shows each CPU instruction executed in the log
-
-#### IO Trace
-
-- **Description**: Enable IO register tracing
-- **Values**: Off (default), On
-- **Effect**: Shows IO register reads and writes in the log
-
-#### Bank Trace
-
-- **Description**: Enable bank switching tracing
-- **Values**: Off (default), On
-- **Effect**: Shows bank switch operations in the log
-
-### Notes
-
-1. **Changes require restart** — Most core options require restarting the core to take effect
-2. **Performance impact** — Some options may affect performance
-3. **Debug options are verbose** — Use with caution in production
-4. **Default values are recommended** — Change only if you know what you're doing
+The compressed file includes writable flash/NAND, RAM, CPU, RTC, and peripheral
+state. The model and a fingerprint of the complete source firmware set isolate
+incompatible sessions. It is restored automatically the next time the same model
+and firmware set starts. An abnormal frontend termination cannot flush changes
+from the current session.
 
 ## Save States
 
@@ -212,9 +154,10 @@ Save states are supported through RetroArch's save state system.
 
 ### Important Notes
 
-- Save states are tied to the specific model and firmware version
-- Save states from different models are not compatible
-- Save states are separate from persistent sessions
+- The core rejects save states created for a different model
+- Use the same firmware set when loading a save state
+- Manual save states are separate from the automatically managed persistent device state
+- Source firmware dumps remain read-only
 
 ## Screenshots
 
@@ -222,30 +165,12 @@ Screenshots can be taken through RetroArch:
 
 - Press **F8** or use **Quick Menu → Take Screenshot**
 
-## Debug Features
-
-### CPU Tracing
-
-Enable CPU tracing through core options:
-
-1. Open **Quick Menu → Core Options**
-2. Enable **CPU Trace**
-3. Restart the core
-
-### IO Tracing
-
-Enable IO register tracing:
-
-1. Open **Quick Menu → Core Options**
-2. Enable **IO Trace**
-3. Restart the core
-
 ## Troubleshooting
 
 ### Common Issues
 
-1. **"No firmware found"** — Ensure firmware files are in the correct location
-2. **"Model detection failed"** — Manually select the model in core options
+1. **"Missing firmware"** — Verify the exact system-directory paths for the selected model
+2. **The wrong machine starts** — Change **Core Options → Machine Model**, then restart the core
 3. **"Black screen"** — Check firmware file integrity
 
 ### Debug Logging
