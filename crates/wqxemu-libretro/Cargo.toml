@@ -6,7 +6,7 @@ description = "RetroArch/libretro core for WQXEmu"
 license.workspace = true
 
 [lib]
-name = "wqxemu_libretro"
+name = "wqxemu"
 crate-type = ["cdylib"]
 
 [dependencies]

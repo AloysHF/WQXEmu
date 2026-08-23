@@ -49,9 +49,9 @@ cargo build -p wqxemu-libretro --target x86_64-linux-android --release
 ### Output Files
 
 The compiled core will be at:
-- `target/aarch64-linux-android/release/libwqxemu_libretro.so`
-- `target/armv7-linux-androideabi/release/libwqxemu_libretro.so`
-- `target/x86_64-linux-android/release/libwqxemu_libretro.so`
+- `target/aarch64-linux-android/release/libwqxemu.so`
+- `target/armv7-linux-androideabi/release/libwqxemu.so`
+- `target/x86_64-linux-android/release/libwqxemu.so`
 
 ## Installation
 
@@ -71,7 +71,7 @@ The compiled core will be at:
 1. Connect your Android device to your computer
 2. Copy the core file to your device:
    ```bash
-   adb push target/aarch64-linux-android/release/libwqxemu_libretro.so /sdcard/RetroArch/cores/
+   adb push target/aarch64-linux-android/release/libwqxemu.so /sdcard/RetroArch/cores/
    ```
 3. Copy firmware files:
    ```bash

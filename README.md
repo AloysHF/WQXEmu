@@ -7,6 +7,7 @@
 <p align="center">
   <a href="https://AloysHF.github.io/WQXEmu/"><img src="https://img.shields.io/badge/Website-WQXEmu-E8553A?logo=githubpages&logoColor=white" alt="Website"></a>
   <a href="https://github.com/AloysHF/WQXEmu/actions/workflows/ci.yml"><img src="https://github.com/AloysHF/WQXEmu/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://git.libretro.com/libretro/wqxemu/-/pipelines"><img src="https://img.shields.io/gitlab/pipeline-status/wqxemu?gitlab_url=https%3A%2F%2Fgit.libretro.com%2Flibretro&branch=master&logo=gitlab&label=Pipeline%20Status" alt="Gitlab Pipeline Status" ></a>
   <a href="https://github.com/AloysHF/WQXEmu/releases/latest"><img src="https://img.shields.io/github/v/release/AloysHF/WQXEmu" alt="Release"></a>
   <a href="https://github.com/AloysHF/WQXEmu/releases"><img src="https://img.shields.io/github/downloads/AloysHF/WQXEmu/total" alt="Downloads"></a>
   <a href="https://sonarcloud.io/dashboard?id=AloysHF_WQXEmu"><img src="https://sonarcloud.io/api/project_badges/measure?project=AloysHF_WQXEmu&metric=alert_status" alt="Quality Gate Status"></a>
@@ -38,7 +39,7 @@ A Wenquxing (文曲星) electronic dictionary emulator written in Rust, using Lo
 Download the latest binary from the [Releases](https://github.com/AloysHF/WQXEmu/releases) page and run:
 
 ```bash
-wqxemu --model nc1020 --rom roms/nc1020/obj_lu.bin --nor roms/nc1020/nc1020.fls
+wqx-emu --model nc1020 --rom roms/nc1020/obj_lu.bin --nor roms/nc1020/nc1020.fls
 ```
 
 Firmware dumps are passed with options named after the storage device: `--rom`, `--nor`, `--nand`, and `--nand0`. The required combination depends on the selected model.
@@ -73,7 +74,7 @@ cargo build --release
 cargo run --release -- --model nc1020 --rom roms/nc1020/obj_lu.bin --nor roms/nc1020/nc1020.fls
 ```
 
-The binary is produced at `target/release/wqxemu` (or `wqxemu.exe` on Windows).
+The binary is produced at `target/release/wqx-emu` (or `wqx-emu.exe` on Windows).
 
 ### Libretro Core (for RetroArch)
 
@@ -81,7 +82,7 @@ The binary is produced at `target/release/wqxemu` (or `wqxemu.exe` on Windows).
 cargo build -p wqxemu-libretro --release
 ```
 
-The compiled core (`wqxemu_libretro.dll` / `libwqxemu_libretro.so` / `libwqxemu_libretro.dylib`) can be loaded in RetroArch.
+The compiled core (`wqxemu.dll` / `libwqxemu.so` / `libwqxemu.dylib`) can be loaded in RetroArch. Rename to `wqxemu_libretro.<ext>` if your RetroArch setup expects that name.
 
 For Android cross-compilation, see [Android Libretro Core](docs/Android-Libretro-Core.md).
 For iOS, see [iOS Libretro Core](docs/iOS-Libretro-Core.md).
@@ -124,10 +125,10 @@ crates/
 │           ├── cc800.rs       # CC800 model
 │           ├── nc2000.rs      # NC2000 model
 │           └── nc3000.rs      # NC3000 model
-├── wqxemu/                    # Standalone binary (→ wqxemu)
+├── wqxemu/                    # Standalone binary (→ wqx-emu)
 │   └── src/
 │       └── main.rs            # Window loop and CLI frontend
-└── wqxemu-libretro/           # libretro cdylib (→ wqxemu_libretro.{dll,so,dylib})
+└── wqxemu-libretro/           # libretro cdylib (→ wqxemu.{dll,so,dylib})
     └── src/
         └── lib.rs             # libretro API implementation
 ```

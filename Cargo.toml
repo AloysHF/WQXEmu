@@ -5,7 +5,7 @@ members = [
     "crates/wqxemu",
     "crates/wqxemu-libretro",
 ]
-default-members = ["crates/wqxemu"]
+default-members = ["crates/wqxemu-libretro"]
 
 [workspace.package]
 version = "0.1.0"

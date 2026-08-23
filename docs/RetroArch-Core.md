@@ -27,9 +27,11 @@ cargo build -p wqxemu-libretro --release
 ```
 
 The compiled core will be at:
-- Windows: `target/release/wqxemu_libretro.dll`
-- Linux: `target/release/libwqxemu_libretro.so`
-- macOS: `target/release/libwqxemu_libretro.dylib`
+- Windows: `target/release/wqxemu.dll`
+- Linux: `target/release/libwqxemu.so`
+- macOS: `target/release/libwqxemu.dylib`
+
+Rename to `wqxemu_libretro.<ext>` before placing in RetroArch's `cores/` directory.
 
 ## Supported Platforms
 

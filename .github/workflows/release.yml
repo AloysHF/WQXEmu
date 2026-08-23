@@ -59,33 +59,30 @@ jobs:
           mkdir -p "$out"
           rel="target/${{ matrix.target }}/release"
           # Copy libretro core with correct name
-          for f in "wqxemu_libretro.dll:wqxemu_libretro.dll" \
-                   "libwqxemu_libretro.so:wqxemu_libretro.so" \
-                   "libwqxemu_libretro.dylib:wqxemu_libretro.dylib"; do
+          for f in "wqxemu.dll:wqxemu_libretro.dll" \
+                   "libwqxemu.so:wqxemu_libretro.so" \
+                   "libwqxemu.dylib:wqxemu_libretro.dylib"; do
             src="${f%%:*}"; dst="${f##*:}"
             if [ -f "$rel/$src" ]; then
               cp "$rel/$src" "$out/$dst"
               break
             fi
           done
-          # Copy info file if exists
-          if [ -f "crates/wqxemu-libretro/wqxemu_libretro.info" ]; then
-            cp "crates/wqxemu-libretro/wqxemu_libretro.info" "$out/"
-          fi
+          cp crates/wqxemu-libretro/wqxemu_libretro.info "$out/wqxemu_libretro.info"
           ls -la "$out"
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../${{ matrix.artifact }}.tar.gz wqxemu
+          tar czf ../../../${{ matrix.artifact }}.tar.gz wqx-emu
           cd ../../..
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          7z a ../../../${{ matrix.artifact }}.zip wqxemu.exe
+          7z a ../../../${{ matrix.artifact }}.zip wqx-emu.exe
           cd ../../..
 
       - name: Package libretro (Unix)
@@ -161,13 +158,11 @@ jobs:
             triple="${ABI_TRIPLE[$abi]}"
             out="libretro/wqx-emu-android/$abi"
             mkdir -p "$out"
-            cp "target/$triple/release/libwqxemu_libretro.so" \
+            cp "target/$triple/release/libwqxemu.so" \
                "$out/wqxemu_libretro_android.so"
           done
-          if [ -f "crates/wqxemu-libretro/wqxemu_libretro.info" ]; then
-            cp "crates/wqxemu-libretro/wqxemu_libretro.info" \
-               libretro/wqx-emu-android/wqxemu_libretro.info
-          fi
+          cp crates/wqxemu-libretro/wqxemu_libretro.info \
+             libretro/wqx-emu-android/wqxemu_libretro.info
           ls -laR libretro/wqx-emu-android
 
       - name: Package libretro (Android)
@@ -218,14 +213,12 @@ jobs:
           out="libretro/wqx-emu-ios"
           mkdir -p "$out/simulator"
           lipo -create \
-            target/aarch64-apple-ios/release/libwqxemu_libretro.dylib \
-            target/x86_64-apple-ios/release/libwqxemu_libretro.dylib \
+            target/aarch64-apple-ios/release/libwqxemu.dylib \
+            target/x86_64-apple-ios/release/libwqxemu.dylib \
             -output "$out/wqxemu_libretro_ios.dylib"
-          cp target/aarch64-apple-ios-sim/release/libwqxemu_libretro.dylib \
+          cp target/aarch64-apple-ios-sim/release/libwqxemu.dylib \
              "$out/simulator/wqxemu_libretro_ios.dylib"
-          if [ -f "crates/wqxemu-libretro/wqxemu_libretro.info" ]; then
-            cp "crates/wqxemu-libretro/wqxemu_libretro.info" "$out/"
-          fi
+          cp crates/wqxemu-libretro/wqxemu_libretro.info "$out/"
           ls -laR "$out"
 
       - name: Package libretro (iOS)
@@ -284,15 +277,13 @@ jobs:
       - name: Verify and stage libretro core (webOS)
         shell: bash
         run: |
-          core="target/$RUST_TARGET/release/libwqxemu_libretro.so"
+          core="target/$RUST_TARGET/release/libwqxemu.so"
           arm-webos-linux-gnueabi-readelf -h "$core"
           arm-webos-linux-gnueabi-readelf -d "$core"
           out="libretro/wqx-emu-webos"
           mkdir -p "$out"
           cp "$core" "$out/wqxemu_libretro.so"
-          if [ -f "crates/wqxemu-libretro/wqxemu_libretro.info" ]; then
-            cp "crates/wqxemu-libretro/wqxemu_libretro.info" "$out/"
-          fi
+          cp crates/wqxemu-libretro/wqxemu_libretro.info "$out/"
           ls -la "$out"
 
       - name: Package libretro (webOS)
