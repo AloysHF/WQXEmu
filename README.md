@@ -7,6 +7,7 @@
 <p align="center">
   <a href="https://AloysHF.github.io/WQXEmu/"><img src="https://img.shields.io/badge/Website-WQXEmu-E8553A?logo=githubpages&logoColor=white" alt="Website"></a>
   <a href="https://github.com/AloysHF/WQXEmu/actions/workflows/ci.yml"><img src="https://github.com/AloysHF/WQXEmu/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://git.libretro.com/libretro/wqxemu/-/pipelines"><img src="https://img.shields.io/gitlab/pipeline-status/wqxemu?gitlab_url=https%3A%2F%2Fgit.libretro.com%2Flibretro&branch=master&logo=gitlab&label=Pipeline%20Status" alt="Gitlab Pipeline Status" ></a>
   <a href="https://github.com/AloysHF/WQXEmu/releases/latest"><img src="https://img.shields.io/github/v/release/AloysHF/WQXEmu" alt="Release"></a>
   <a href="https://github.com/AloysHF/WQXEmu/releases"><img src="https://img.shields.io/github/downloads/AloysHF/WQXEmu/total" alt="Downloads"></a>
   <a href="https://sonarcloud.io/dashboard?id=AloysHF_WQXEmu"><img src="https://sonarcloud.io/api/project_badges/measure?project=AloysHF_WQXEmu&metric=alert_status" alt="Quality Gate Status"></a>
