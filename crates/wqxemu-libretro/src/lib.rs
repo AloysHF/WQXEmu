@@ -42,7 +42,6 @@ const RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY: u32 = 31;
 
 // Pixel format
 const RETRO_PIXEL_FORMAT_XRGB8888: u32 = 1;
-const RETRO_PIXEL_FORMAT_RGB565: u32 = 2;
 
 // Memory types
 const RETRO_MEMORY_SAVE_RAM: u32 = 0;
@@ -285,6 +284,19 @@ unsafe fn report_error(message: &str) {
         RETRO_ENVIRONMENT_SET_MESSAGE,
         &mut retro_message as *mut RetroMessage as *mut c_void,
     );
+}
+
+unsafe fn request_pixel_format() -> bool {
+    let mut pixel_format = RETRO_PIXEL_FORMAT_XRGB8888;
+    if environment(
+        RETRO_ENVIRONMENT_SET_PIXEL_FORMAT,
+        &mut pixel_format as *mut u32 as *mut c_void,
+    ) {
+        true
+    } else {
+        report_error("The frontend does not support the required XRGB8888 pixel format");
+        false
+    }
 }
 
 fn persistent_state_path(
@@ -536,13 +548,6 @@ pub extern "C" fn retro_init() {
         {
             SAVE_DIR = Some(CStr::from_ptr(save_dir).to_string_lossy().into_owned());
         }
-
-        // Set pixel format to XRGB8888
-        let mut pixel_format = RETRO_PIXEL_FORMAT_XRGB8888;
-        environment(
-            RETRO_ENVIRONMENT_SET_PIXEL_FORMAT,
-            &mut pixel_format as *mut u32 as *mut c_void,
-        );
     }
     log::info!("WQXEmu libretro core initialized");
 }
@@ -610,6 +615,9 @@ pub extern "C" fn retro_load_game(info: *const RetroGameInfo) -> bool {
     unsafe {
         if !info.is_null() {
             report_error("WQXEmu does not load firmware as content");
+            return false;
+        }
+        if !request_pixel_format() {
             return false;
         }
 
