@@ -649,13 +649,17 @@ kept as a convenience for the NC1020 case. The frame loop calls the machine's
 `run_frame()` implementation; the default uses `cycles_per_frame()`, while
 models with hardware-specific scheduling can override the whole frame.
 
-The standalone frontend's optional `--state-file` path stores a gzip-compressed,
-versioned persistent session. The envelope binds the session to its hardware
-model and immutable firmware identity, while each `Machine` implementation
-serializes all mutable model-specific storage and peripheral state. Writes use
-a temporary file in the destination directory followed by an atomic replace.
-This path is separate from the compact Save State API used by libretro, so
-libretro serialization size and compatibility are unchanged.
+Persistent sessions use a gzip-compressed, versioned envelope that binds the
+session to its hardware model and immutable firmware identity. Each `Machine`
+implementation serializes all mutable model-specific storage and peripheral
+state. Writes use a temporary file in the destination directory followed by an
+atomic replace.
+
+The standalone frontend enables this behavior with `--state-file`. The libretro
+frontend manages it automatically under the frontend save directory as
+`<model>/<firmware fingerprint>.wqxs`; the fingerprint covers the complete source
+firmware set, which remains read-only. Persistent sessions are separate from
+libretro's compact manual Save State API.
 
 ## Model selection
 
@@ -664,9 +668,10 @@ libretro serialization size and compatibility are unchanged.
   NC3000; NAND present → NC2000; 24MB ROM → NC1020; 12MB ROM → PC1000;
   16MB ROM with a volume-1 boot page at 8MB → CC800; otherwise NC1020
   default).
-- libretro core: classifies the loaded file by extension
-  (`.nand`/`.nand0`/`.fls`/`.nor`/other) and picks up sibling files with
-  the same stem, then runs the same auto-detection.
+- Libretro frontend: reads the `wqxemu_model` core option (NC1020 by default),
+  resolves that model's canonical files under the frontend system directory at
+  `WQXEmu/<model>/`, and starts without content. Firmware passed as content is
+  rejected; model auto-detection is not used in this frontend.
 
 ## Keyboard layouts (`keyboard.rs`)
 
@@ -684,4 +689,5 @@ updates the same highlight state.
 2. Create `machines/<model>.rs` implementing `Machine`.
 3. Register it in `machines::create_machine`.
 4. Extend `detect_model` if the ROM files allow auto-detection.
-5. Update the frontend CLI help and this document.
+5. Add the libretro core option value and canonical system-firmware mapping.
+6. Update the frontend documentation, CLI help, and core-info firmware metadata.
