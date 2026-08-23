@@ -62,7 +62,7 @@ closing and starting the core again.
 | Model | Required files | Optional files |
 |-------|----------------|----------------|
 | NC1020 | `obj_lu.bin`, `nc1020.fls` | — |
-| PC1000 | `pc1000.rom`, `pc1000.fls` | — |
+| PC1000 | `pc1000.rom`, `pc1000.nor` | — |
 | CC800 | `obj.bin`, `cc800.fls` | — |
 | NC2000 | `nc2000.nor`, `nc2000.nand`, `nc2000.nand0` | — |
 | NC3000 | `nc3000.nor`, `nc3000.nand` | `nc3000.nand0` |
@@ -80,7 +80,7 @@ system/
     │   └── nc1020.fls
     ├── pc1000/
     │   ├── pc1000.rom
-    │   └── pc1000.fls
+    │   └── pc1000.nor
     ├── cc800/
     │   ├── obj.bin
     │   └── cc800.fls

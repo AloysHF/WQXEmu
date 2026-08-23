@@ -71,7 +71,7 @@ Requires [Rust](https://www.rust-lang.org/tools/install) (stable).
 
 ```bash
 cargo build --release
-cargo run --release -- --model nc1020 --rom tmp/roms/nc1020/obj_lu.bin --nor tmp/roms/nc1020/nc1020.fls
+cargo run -p wqxemu --release -- --model nc1020 --rom tmp/roms/nc1020/obj_lu.bin --nor tmp/roms/nc1020/nc1020.fls
 ```
 
 The binary is produced at `target/release/wqx-emu` (or `wqx-emu.exe` on Windows).

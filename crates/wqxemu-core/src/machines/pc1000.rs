@@ -1052,7 +1052,7 @@ mod tests {
             .unwrap_or_else(|_| std::path::PathBuf::from("tmp/roms"))
             .join("pc1000");
         let rom = base.join("pc1000.rom");
-        let nor = base.join("pc1000.fls");
+        let nor = base.join("pc1000.nor");
         if rom.exists() && nor.exists() {
             Some(RomFiles::new(Some(rom), Some(nor), None, None))
         } else {

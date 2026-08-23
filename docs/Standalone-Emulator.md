@@ -198,7 +198,7 @@ The emulator restores the saved state without re-running first-boot recovery.
 wqx-emu --model nc1020 --rom tmp/roms/nc1020/obj_lu.bin --nor tmp/roms/nc1020/nc1020.fls
 
 # PC1000 with ROM and NOR
-wqx-emu --model pc1000 --rom tmp/roms/pc1000/pc1000.rom --nor tmp/roms/pc1000/pc1000.fls
+wqx-emu --model pc1000 --rom tmp/roms/pc1000/pc1000.rom --nor tmp/roms/pc1000/pc1000.nor
 
 # CC800 with ROM and NOR
 wqx-emu --model cc800 --rom tmp/roms/cc800/obj.bin --nor tmp/roms/cc800/cc800.fls

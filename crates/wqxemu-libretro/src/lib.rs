@@ -209,7 +209,7 @@ fn firmware_files_for_model(system_dir: &Path, model: MachineModel) -> wqxemu_co
         ),
         MachineModel::Pc1000 => wqxemu_core::RomFiles::new(
             Some(model_dir.join("pc1000.rom")),
-            Some(model_dir.join("pc1000.fls")),
+            Some(model_dir.join("pc1000.nor")),
             None,
             None,
         ),
@@ -956,7 +956,7 @@ mod tests {
             (
                 MachineModel::Pc1000,
                 Some("pc1000.rom"),
-                "pc1000.fls",
+                "pc1000.nor",
                 None,
                 None,
             ),
