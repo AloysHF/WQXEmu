@@ -19,6 +19,7 @@ use std::panic;
 use std::path::{Path, PathBuf};
 use std::ptr;
 
+use wqxemu_core::save::{read_persistent_state_file, write_persistent_state_file};
 use wqxemu_core::{key_id_for, layout_for, Emulator, MachineModel, LCD_HEIGHT, LCD_WIDTH};
 
 // ============================================================
@@ -37,6 +38,7 @@ const RETRO_ENVIRONMENT_SET_KEYBOARD_CALLBACK: u32 = 12;
 const RETRO_ENVIRONMENT_GET_VARIABLE: u32 = 15;
 const RETRO_ENVIRONMENT_SET_VARIABLES: u32 = 16;
 const RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME: u32 = 18;
+const RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY: u32 = 31;
 
 // Pixel format
 const RETRO_PIXEL_FORMAT_XRGB8888: u32 = 1;
@@ -178,6 +180,8 @@ static mut AUDIO_BATCH_CB: RetroAudioSampleBatchT = None;
 static mut INPUT_POLL_CB: RetroInputPollT = None;
 static mut INPUT_STATE_CB: RetroInputStateT = None;
 static mut SYSTEM_DIR: Option<String> = None;
+static mut SAVE_DIR: Option<String> = None;
+static mut PERSISTENT_STATE_PATH: Option<PathBuf> = None;
 
 // ============================================================
 // Helper functions
@@ -281,6 +285,32 @@ unsafe fn report_error(message: &str) {
         RETRO_ENVIRONMENT_SET_MESSAGE,
         &mut retro_message as *mut RetroMessage as *mut c_void,
     );
+}
+
+fn persistent_state_path(
+    save_dir: &Path,
+    model: MachineModel,
+    firmware_fingerprint: u64,
+) -> PathBuf {
+    save_dir
+        .join(model.name())
+        .join(format!("{firmware_fingerprint:016x}.wqxs"))
+}
+
+unsafe fn persist_active_emulator() {
+    let (Some(emulator), Some(path)) = (EMULATOR.as_ref(), PERSISTENT_STATE_PATH.as_deref()) else {
+        return;
+    };
+    let result = emulator
+        .save_persistent_state()
+        .and_then(|state| write_persistent_state_file(path, &state));
+    match result {
+        Ok(()) => log::info!("Persistent state saved to {}", path.display()),
+        Err(error) => report_error(&format!(
+            "Failed to save persistent state {}: {error}",
+            path.display()
+        )),
+    }
 }
 
 fn machine_model_tag(model: MachineModel) -> u8 {
@@ -487,6 +517,8 @@ pub extern "C" fn retro_init() {
     unsafe {
         // Get system directory
         SYSTEM_DIR = None;
+        SAVE_DIR = None;
+        PERSISTENT_STATE_PATH = None;
         let mut sys_dir: *const c_char = ptr::null();
         if environment(
             RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY,
@@ -494,6 +526,15 @@ pub extern "C" fn retro_init() {
         ) && !sys_dir.is_null()
         {
             SYSTEM_DIR = Some(CStr::from_ptr(sys_dir).to_string_lossy().into_owned());
+        }
+
+        let mut save_dir: *const c_char = ptr::null();
+        if environment(
+            RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY,
+            &mut save_dir as *mut *const c_char as *mut c_void,
+        ) && !save_dir.is_null()
+        {
+            SAVE_DIR = Some(CStr::from_ptr(save_dir).to_string_lossy().into_owned());
         }
 
         // Set pixel format to XRGB8888
@@ -510,8 +551,11 @@ pub extern "C" fn retro_init() {
 #[no_mangle]
 pub extern "C" fn retro_deinit() {
     unsafe {
+        persist_active_emulator();
         EMULATOR = None;
         SYSTEM_DIR = None;
+        SAVE_DIR = None;
+        PERSISTENT_STATE_PATH = None;
     }
     log::info!("WQXEmu libretro core deinitialized");
 }
@@ -589,6 +633,17 @@ pub extern "C" fn retro_load_game(info: *const RetroGameInfo) -> bool {
             return false;
         }
 
+        let firmware_fingerprint = match files.fingerprint() {
+            Ok(fingerprint) => fingerprint,
+            Err(error) => {
+                report_error(&format!(
+                    "Failed to identify {} firmware: {error}",
+                    model.name()
+                ));
+                return false;
+            }
+        };
+
         let mut emu = match Emulator::new(model, &files) {
             Ok(e) => e,
             Err(e) => {
@@ -598,6 +653,22 @@ pub extern "C" fn retro_load_game(info: *const RetroGameInfo) -> bool {
         };
 
         emu.reset();
+        let persistent_path = SAVE_DIR
+            .as_deref()
+            .map(Path::new)
+            .map(|save_dir| persistent_state_path(save_dir, model, firmware_fingerprint));
+        if let Some(path) = persistent_path.as_deref().filter(|path| path.is_file()) {
+            match read_persistent_state_file(path)
+                .and_then(|state| emu.load_persistent_state(&state))
+            {
+                Ok(()) => log::info!("Persistent state loaded from {}", path.display()),
+                Err(error) => report_error(&format!(
+                    "Ignoring invalid persistent state {}: {error}",
+                    path.display()
+                )),
+            }
+        }
+        PERSISTENT_STATE_PATH = persistent_path;
         EMULATOR = Some(emu);
 
         log::info!(
@@ -612,7 +683,9 @@ pub extern "C" fn retro_load_game(info: *const RetroGameInfo) -> bool {
 #[no_mangle]
 pub extern "C" fn retro_unload_game() {
     unsafe {
+        persist_active_emulator();
         EMULATOR = None;
+        PERSISTENT_STATE_PATH = None;
     }
 }
 
@@ -888,6 +961,23 @@ mod tests {
             );
         }
         assert_eq!(model_from_option("Auto"), None);
+    }
+
+    #[test]
+    fn persistent_state_paths_are_isolated_by_model_and_firmware() {
+        let save_dir = Path::new("saves");
+        assert_eq!(
+            persistent_state_path(save_dir, MachineModel::Nc2000, 0x1234),
+            save_dir.join("nc2000").join("0000000000001234.wqxs")
+        );
+        assert_ne!(
+            persistent_state_path(save_dir, MachineModel::Nc2000, 0x1234),
+            persistent_state_path(save_dir, MachineModel::Nc3000, 0x1234)
+        );
+        assert_ne!(
+            persistent_state_path(save_dir, MachineModel::Nc2000, 0x1234),
+            persistent_state_path(save_dir, MachineModel::Nc2000, 0x5678)
+        );
     }
 
     #[test]

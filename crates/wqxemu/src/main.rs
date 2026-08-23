@@ -6,14 +6,11 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use flate2::read::GzDecoder;
-use flate2::write::GzEncoder;
-use flate2::Compression;
 use minifb::{Key, Window, WindowOptions};
 
-use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
+use wqxemu_core::save::{read_persistent_state_file, write_persistent_state_file};
 use wqxemu_core::{
     detect_model, key_ids, layout_for, Emulator, MachineModel, RomFiles, LCD_HEIGHT, LCD_WIDTH,
 };
@@ -402,50 +399,6 @@ fn save_persistent_state_if_requested(emu: &Emulator, path: Option<&Path>) -> Re
     Ok(())
 }
 
-fn read_persistent_state_file(path: &Path) -> Result<Vec<u8>> {
-    let file = std::fs::File::open(path)
-        .with_context(|| format!("Failed to open state file: {}", path.display()))?;
-    let mut decoder = GzDecoder::new(BufReader::new(file));
-    let mut state = Vec::new();
-    decoder
-        .read_to_end(&mut state)
-        .with_context(|| format!("Failed to decompress state file: {}", path.display()))?;
-    Ok(state)
-}
-
-fn write_persistent_state_file(path: &Path, state: &[u8]) -> Result<()> {
-    let parent = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    let mut temporary = tempfile::NamedTempFile::new_in(parent).with_context(|| {
-        format!(
-            "Failed to create temporary state file for {}",
-            path.display()
-        )
-    })?;
-    {
-        let writer = BufWriter::new(temporary.as_file_mut());
-        let mut encoder = GzEncoder::new(writer, Compression::fast());
-        encoder
-            .write_all(state)
-            .context("Failed to compress persistent state")?;
-        let mut writer = encoder
-            .finish()
-            .context("Failed to finish persistent state compression")?;
-        writer.flush().context("Failed to flush persistent state")?;
-    }
-    temporary
-        .as_file()
-        .sync_all()
-        .context("Failed to sync persistent state")?;
-    temporary
-        .persist(path)
-        .map_err(|error| error.error)
-        .with_context(|| format!("Failed to replace state file: {}", path.display()))?;
-    Ok(())
-}
-
 fn normalized_output_path(path: &Path) -> Result<PathBuf> {
     if path.exists() {
         return std::fs::canonicalize(path)
@@ -681,12 +634,12 @@ fn save_screenshot(pixels: &[u32], path: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        map_key_nc1020, read_persistent_state_file, validate_firmware_files,
-        validate_state_file_path, window_to_skin_pos, write_persistent_state_file, Args,
+        map_key_nc1020, validate_firmware_files, validate_state_file_path, window_to_skin_pos, Args,
     };
     use clap::Parser;
     use minifb::Key;
     use std::path::{Path, PathBuf};
+    use wqxemu_core::save::{read_persistent_state_file, write_persistent_state_file};
     use wqxemu_core::{key_ids, MachineModel, RomFiles};
 
     #[test]

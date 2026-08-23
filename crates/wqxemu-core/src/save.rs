@@ -4,7 +4,12 @@
 // to/from binary format for instant save/load.
 
 use anyhow::{Context, Result};
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use serde::{Deserialize, Serialize};
+use std::io::{BufReader, BufWriter, Read, Write};
+use std::path::Path;
 
 use crate::cpu::Cpu;
 use crate::machine::MachineModel;
@@ -32,6 +37,54 @@ pub(crate) fn persistent_identity(data: &[u8]) -> u64 {
     data.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
         (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
     })
+}
+
+/// Read a compressed persistent session from disk.
+pub fn read_persistent_state_file(path: &Path) -> Result<Vec<u8>> {
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("Failed to open state file: {}", path.display()))?;
+    let mut decoder = GzDecoder::new(BufReader::new(file));
+    let mut state = Vec::new();
+    decoder
+        .read_to_end(&mut state)
+        .with_context(|| format!("Failed to decompress state file: {}", path.display()))?;
+    Ok(state)
+}
+
+/// Atomically write a compressed persistent session to disk.
+pub fn write_persistent_state_file(path: &Path, state: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("Failed to create state directory: {}", parent.display()))?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent).with_context(|| {
+        format!(
+            "Failed to create temporary state file for {}",
+            path.display()
+        )
+    })?;
+    {
+        let writer = BufWriter::new(temporary.as_file_mut());
+        let mut encoder = GzEncoder::new(writer, Compression::fast());
+        encoder
+            .write_all(state)
+            .context("Failed to compress persistent state")?;
+        let mut writer = encoder
+            .finish()
+            .context("Failed to finish persistent state compression")?;
+        writer.flush().context("Failed to flush persistent state")?;
+    }
+    temporary
+        .as_file()
+        .sync_all()
+        .context("Failed to sync persistent state")?;
+    temporary
+        .persist(path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("Failed to replace state file: {}", path.display()))?;
+    Ok(())
 }
 
 /// Complete emulator save state
