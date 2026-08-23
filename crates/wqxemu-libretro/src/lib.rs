@@ -13,7 +13,7 @@
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 #![allow(clippy::manual_range_contains)]
 
-use std::ffi::{c_void, CStr};
+use std::ffi::{c_void, CStr, CString};
 use std::os::raw::c_char;
 use std::panic;
 use std::path::{Path, PathBuf};
@@ -30,12 +30,13 @@ const RETRO_REGION_NTSC: u32 = 0;
 
 // Environment commands
 const RETRO_ENVIRONMENT_SET_PIXEL_FORMAT: u32 = 1;
+const RETRO_ENVIRONMENT_SET_MESSAGE: u32 = 6;
+const RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY: u32 = 9;
 const RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS: u32 = 11;
 const RETRO_ENVIRONMENT_SET_KEYBOARD_CALLBACK: u32 = 12;
+const RETRO_ENVIRONMENT_GET_VARIABLE: u32 = 15;
 const RETRO_ENVIRONMENT_SET_VARIABLES: u32 = 16;
-const RETRO_ENVIRONMENT_GET_VARIABLE: u32 = 17;
-const RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE: u32 = 18;
-const RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY: u32 = 9;
+const RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME: u32 = 18;
 
 // Pixel format
 const RETRO_PIXEL_FORMAT_XRGB8888: u32 = 0;
@@ -159,6 +160,12 @@ struct RetroInputDescriptor {
     description: *const c_char,
 }
 
+#[repr(C)]
+struct RetroMessage {
+    msg: *const c_char,
+    frames: u32,
+}
+
 // ============================================================
 // Global state
 // ============================================================
@@ -188,67 +195,92 @@ unsafe fn environment(cmd: u32, data: *mut c_void) -> bool {
     ENV_CB.map(|cb| cb(cmd, data)).unwrap_or(false)
 }
 
-fn extension_matches(path: &Path, extensions: &[&str]) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            extensions
-                .iter()
-                .any(|expected| extension.eq_ignore_ascii_case(expected))
-        })
-}
-
-fn find_companion(parent: &Path, stem: Option<&str>, extensions: &[&str]) -> Option<PathBuf> {
-    let entries = std::fs::read_dir(parent).ok()?;
-    let candidates: Vec<PathBuf> = entries
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.is_file() && extension_matches(path, extensions))
-        .collect();
-
-    if let Some(stem) = stem {
-        if let Some(path) = candidates.iter().find(|path| {
-            path.file_stem()
-                .and_then(|candidate| candidate.to_str())
-                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(stem))
-        }) {
-            return Some(path.clone());
+fn firmware_files_for_model(system_dir: &Path, model: MachineModel) -> wqxemu_core::RomFiles {
+    let model_dir = system_dir.join("WQXEmu").join(model.name());
+    match model {
+        MachineModel::Nc1020 => wqxemu_core::RomFiles::new(
+            Some(model_dir.join("obj_lu.bin")),
+            Some(model_dir.join("nc1020.fls")),
+            None,
+            None,
+        ),
+        MachineModel::Pc1000 => wqxemu_core::RomFiles::new(
+            Some(model_dir.join("pc1000.rom")),
+            Some(model_dir.join("pc1000.fls")),
+            None,
+            None,
+        ),
+        MachineModel::Cc800 => wqxemu_core::RomFiles::new(
+            Some(model_dir.join("obj.bin")),
+            Some(model_dir.join("cc800.fls")),
+            None,
+            None,
+        ),
+        MachineModel::Nc2000 => wqxemu_core::RomFiles::new(
+            None,
+            Some(model_dir.join("nc2000.nor")),
+            Some(model_dir.join("nc2000.nand")),
+            Some(model_dir.join("nc2000.nand0")),
+        ),
+        MachineModel::Nc3000 => {
+            let nand0 = model_dir.join("nc3000.nand0");
+            wqxemu_core::RomFiles::new(
+                None,
+                Some(model_dir.join("nc3000.nor")),
+                Some(model_dir.join("nc3000.nand")),
+                nand0.is_file().then_some(nand0),
+            )
         }
     }
-
-    (candidates.len() == 1).then(|| candidates[0].clone())
 }
 
-fn assemble_firmware_files(game_path: &Path) -> wqxemu_core::RomFiles {
-    let parent = game_path.parent().unwrap_or_else(|| Path::new(""));
-    let stem = game_path.file_stem().and_then(|stem| stem.to_str());
-    let extension = game_path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(str::to_ascii_lowercase);
+fn missing_required_firmware(files: &wqxemu_core::RomFiles) -> Vec<&Path> {
+    [&files.rom, &files.nor, &files.nand, &files.nand0]
+        .into_iter()
+        .flatten()
+        .map(PathBuf::as_path)
+        .filter(|path| !path.is_file())
+        .collect()
+}
 
-    let mut files = wqxemu_core::RomFiles::new(None, None, None, None);
-    match extension.as_deref() {
-        Some("nand") => files.nand = Some(game_path.to_path_buf()),
-        Some("nand0") => files.nand0 = Some(game_path.to_path_buf()),
-        Some("fls") | Some("nor") => files.nor = Some(game_path.to_path_buf()),
-        _ => files.rom = Some(game_path.to_path_buf()),
-    }
+fn model_from_option(value: &str) -> Option<MachineModel> {
+    MachineModel::from_name(value)
+}
 
-    if files.rom.is_none() {
-        files.rom = find_companion(parent, stem, &["bin", "rom"]);
+unsafe fn selected_model() -> MachineModel {
+    let mut variable = RetroVariable {
+        key: c"wqxemu_model".as_ptr(),
+        value: ptr::null(),
+    };
+    if environment(
+        RETRO_ENVIRONMENT_GET_VARIABLE,
+        &mut variable as *mut RetroVariable as *mut c_void,
+    ) && !variable.value.is_null()
+    {
+        if let Some(model) = CStr::from_ptr(variable.value)
+            .to_str()
+            .ok()
+            .and_then(model_from_option)
+        {
+            return model;
+        }
     }
-    if files.nor.is_none() {
-        files.nor = find_companion(parent, stem, &["fls", "nor"]);
-    }
-    if files.nand.is_none() {
-        files.nand = find_companion(parent, stem, &["nand"]);
-    }
-    if files.nand0.is_none() {
-        files.nand0 = find_companion(parent, stem, &["nand0"]);
-    }
+    MachineModel::Nc1020
+}
 
-    files
+unsafe fn report_error(message: &str) {
+    log::error!("{message}");
+    let Ok(message) = CString::new(message) else {
+        return;
+    };
+    let mut retro_message = RetroMessage {
+        msg: message.as_ptr(),
+        frames: 300,
+    };
+    environment(
+        RETRO_ENVIRONMENT_SET_MESSAGE,
+        &mut retro_message as *mut RetroMessage as *mut c_void,
+    );
 }
 
 fn machine_model_tag(model: MachineModel) -> u8 {
@@ -385,6 +417,13 @@ pub extern "C" fn retro_set_environment(cb: RetroEnvironmentT) {
     set_input_descriptors();
     // Set core variables
     set_core_variables();
+    let mut supports_no_game = true;
+    unsafe {
+        environment(
+            RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME,
+            &mut supports_no_game as *mut bool as *mut c_void,
+        );
+    }
     let mut keyboard_callback = RetroKeyboardCallback {
         callback: Some(keyboard_event),
     };
@@ -447,6 +486,7 @@ pub extern "C" fn retro_api_version() -> u32 {
 pub extern "C" fn retro_init() {
     unsafe {
         // Get system directory
+        SYSTEM_DIR = None;
         let mut sys_dir: *const c_char = ptr::null();
         if environment(
             RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY,
@@ -471,6 +511,7 @@ pub extern "C" fn retro_init() {
 pub extern "C" fn retro_deinit() {
     unsafe {
         EMULATOR = None;
+        SYSTEM_DIR = None;
     }
     log::info!("WQXEmu libretro core deinitialized");
 }
@@ -482,9 +523,9 @@ pub extern "C" fn retro_get_system_info(info: *mut RetroSystemInfo) {
         (*info) = RetroSystemInfo {
             library_name: c"WQXEmu".as_ptr(),
             library_version: c"0.1.0".as_ptr(),
-            valid_extensions: c"bin|fls|rom|nor|nand|nand0".as_ptr(),
-            need_fullpath: true,
-            block_extract: true,
+            valid_extensions: c"".as_ptr(),
+            need_fullpath: false,
+            block_extract: false,
         };
     }
 }
@@ -519,36 +560,39 @@ pub extern "C" fn retro_set_controller_port_device(_port: u32, _device: u32) {
     // NC1020 only supports basic input
 }
 
-/// Load a game
+/// Start the selected machine without content.
 #[no_mangle]
 pub extern "C" fn retro_load_game(info: *const RetroGameInfo) -> bool {
     unsafe {
-        let game_info = &*info;
-
-        // Check if path is valid
-        if game_info.path.is_null() {
-            log::error!("Game path is null");
+        if !info.is_null() {
+            report_error("WQXEmu does not load firmware as content");
             return false;
         }
 
-        let path = match CStr::from_ptr(game_info.path).to_str() {
-            Ok(p) => p,
-            Err(e) => {
-                log::error!("Invalid game path: {}", e);
-                return false;
-            }
+        let Some(system_dir) = SYSTEM_DIR.as_deref() else {
+            report_error("RetroArch system directory is not configured");
+            return false;
         };
-
-        let game_path = Path::new(path);
-        let files = assemble_firmware_files(game_path);
-
-        let model = wqxemu_core::detect_model(&files);
-        log::info!("Detected model: {}", model.name());
+        let model = selected_model();
+        let files = firmware_files_for_model(Path::new(system_dir), model);
+        let missing = missing_required_firmware(&files);
+        if !missing.is_empty() {
+            let paths = missing
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            report_error(&format!(
+                "Missing {} firmware in the RetroArch system directory: {paths}",
+                model.name()
+            ));
+            return false;
+        }
 
         let mut emu = match Emulator::new(model, &files) {
             Ok(e) => e,
             Err(e) => {
-                log::error!("Failed to create emulator: {}", e);
+                report_error(&format!("Failed to start {}: {e}", model.name()));
                 return false;
             }
         };
@@ -556,7 +600,10 @@ pub extern "C" fn retro_load_game(info: *const RetroGameInfo) -> bool {
         emu.reset();
         EMULATOR = Some(emu);
 
-        log::info!("Game loaded: {}", path);
+        log::info!(
+            "Started {} from the RetroArch system directory",
+            model.name()
+        );
         true
     }
 }
@@ -754,57 +801,93 @@ fn set_input_descriptors() {
 
 /// Set core variables for RetroArch
 fn set_core_variables() {
-    // Core variables allow users to configure the emulator through RetroArch UI
-    // We'll skip the full implementation for now
+    let variables = [
+        RetroVariable {
+            key: c"wqxemu_model".as_ptr(),
+            value: c"Machine Model (Restart); NC1020|PC1000|CC800|NC2000|NC3000".as_ptr(),
+        },
+        RetroVariable {
+            key: ptr::null(),
+            value: ptr::null(),
+        },
+    ];
+    unsafe {
+        environment(
+            RETRO_ENVIRONMENT_SET_VARIABLES,
+            variables.as_ptr() as *mut c_void,
+        );
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    #[test]
+    fn resolves_canonical_system_firmware_for_each_model() {
+        let system_dir = Path::new("system");
+        let cases = [
+            (
+                MachineModel::Nc1020,
+                Some("obj_lu.bin"),
+                "nc1020.fls",
+                None,
+                None,
+            ),
+            (
+                MachineModel::Pc1000,
+                Some("pc1000.rom"),
+                "pc1000.fls",
+                None,
+                None,
+            ),
+            (
+                MachineModel::Cc800,
+                Some("obj.bin"),
+                "cc800.fls",
+                None,
+                None,
+            ),
+            (
+                MachineModel::Nc2000,
+                None,
+                "nc2000.nor",
+                Some("nc2000.nand"),
+                Some("nc2000.nand0"),
+            ),
+            (
+                MachineModel::Nc3000,
+                None,
+                "nc3000.nor",
+                Some("nc3000.nand"),
+                None,
+            ),
+        ];
 
-    fn test_directory(name: &str) -> PathBuf {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "wqxemu-libretro-{name}-{}-{nonce}",
-            std::process::id()
-        ))
+        for (model, rom, nor, nand, nand0) in cases {
+            let files = firmware_files_for_model(system_dir, model);
+            let model_dir = system_dir.join("WQXEmu").join(model.name());
+            assert_eq!(files.rom, rom.map(|name| model_dir.join(name)));
+            assert_eq!(files.nor, Some(model_dir.join(nor)));
+            assert_eq!(files.nand, nand.map(|name| model_dir.join(name)));
+            assert_eq!(files.nand0, nand0.map(|name| model_dir.join(name)));
+        }
     }
 
     #[test]
-    fn assembles_uniquely_named_sibling_firmware() {
-        let directory = test_directory("siblings");
-        fs::create_dir_all(&directory).unwrap();
-        let rom = directory.join("obj_lu.bin");
-        let nor = directory.join("nc1020.fls");
-        fs::write(&rom, []).unwrap();
-        fs::write(&nor, []).unwrap();
-
-        let files = assemble_firmware_files(&rom);
-
-        assert_eq!(files.rom.as_deref(), Some(rom.as_path()));
-        assert_eq!(files.nor.as_deref(), Some(nor.as_path()));
-        fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn prefers_same_stem_when_multiple_companions_exist() {
-        let directory = test_directory("same-stem");
-        fs::create_dir_all(&directory).unwrap();
-        let rom = directory.join("pc1000.rom");
-        let nor = directory.join("pc1000.fls");
-        fs::write(&rom, []).unwrap();
-        fs::write(&nor, []).unwrap();
-        fs::write(directory.join("backup.fls"), []).unwrap();
-
-        let files = assemble_firmware_files(&rom);
-
-        assert_eq!(files.nor.as_deref(), Some(nor.as_path()));
-        fs::remove_dir_all(directory).unwrap();
+    fn parses_all_machine_model_option_values() {
+        for model in [
+            MachineModel::Nc1020,
+            MachineModel::Pc1000,
+            MachineModel::Cc800,
+            MachineModel::Nc2000,
+            MachineModel::Nc3000,
+        ] {
+            assert_eq!(
+                model_from_option(&model.name().to_ascii_uppercase()),
+                Some(model)
+            );
+        }
+        assert_eq!(model_from_option("Auto"), None);
     }
 
     #[test]
