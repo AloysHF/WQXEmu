@@ -32,9 +32,9 @@ cargo build -p wqxemu-libretro --target aarch64-apple-ios-sim --release
 ### Output Files
 
 The compiled core will be at:
-- `target/aarch64-apple-ios/release/libwqxemu_libretro.dylib`
-- `target/x86_64-apple-ios/release/libwqxemu_libretro.dylib`
-- `target/aarch64-apple-ios-sim/release/libwqxemu_libretro.dylib`
+- `target/aarch64-apple-ios/release/libwqxemu.dylib`
+- `target/x86_64-apple-ios/release/libwqxemu.dylib`
+- `target/aarch64-apple-ios-sim/release/libwqxemu.dylib`
 
 ## Integrating the Core into RetroArch
 
@@ -42,7 +42,7 @@ iOS does not allow RetroArch to install or update executable cores at runtime.
 The WQXEmu `.dylib` must be included in the RetroArch application before the app
 is signed and installed:
 
-1. Build `libwqxemu_libretro.dylib` for the target device architecture
+1. Build `libwqxemu.dylib` for the target device architecture
 2. Copy it into RetroArch's source tree at `pkg/apple/iOS/modules/`
 3. Build or archive RetroArch with Xcode so the application and core are signed
    together
