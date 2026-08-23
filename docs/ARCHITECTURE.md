@@ -680,8 +680,9 @@ The frontend embeds the live LCD in the matching model image from
 key matrices: each `KeyDef` carries the matrix position (`row << 3 | col`),
 the key-face label and the PC key hint. The desktop frontend (`wqxemu`)
 maps those keys to their positions on the device skin, highlights pressed
-keys, and accepts mouse clicks; the PC keyboard mapping in `main.rs`
-updates the same highlight state.
+keys, and accepts mouse clicks. `HostKey` and `FrontendInputState` provide the
+shared physical keyboard mapping and merge keyboard, RetroPad, and pointer
+sources before updating the same highlight and emulated matrix state.
 
 ## Adding a new model
 

@@ -281,19 +281,23 @@ unsafe fn selected_model() -> MachineModel {
     MachineModel::Nc1020
 }
 
-unsafe fn report_error(message: &str) {
-    log::error!("{message}");
+unsafe fn show_message(message: &str, frames: u32) {
     let Ok(message) = CString::new(message) else {
         return;
     };
     let mut retro_message = RetroMessage {
         msg: message.as_ptr(),
-        frames: 300,
+        frames,
     };
     environment(
         RETRO_ENVIRONMENT_SET_MESSAGE,
         &mut retro_message as *mut RetroMessage as *mut c_void,
     );
+}
+
+unsafe fn report_error(message: &str) {
+    log::error!("{message}");
+    show_message(message, 300);
 }
 
 unsafe fn request_pixel_format() -> bool {
@@ -697,6 +701,10 @@ pub extern "C" fn retro_load_game(info: *const RetroGameInfo) -> bool {
         log::info!(
             "Started {} from the RetroArch system directory",
             model.name()
+        );
+        show_message(
+            "Physical keyboard: enable Game Focus (default: Scroll Lock)",
+            300,
         );
         true
     }
