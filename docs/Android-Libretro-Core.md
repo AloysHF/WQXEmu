@@ -1,6 +1,8 @@
 # Android Libretro Core
 
-This guide covers building and using the WQXEmu libretro core on Android.
+This guide covers Android-specific build, installation, storage, and troubleshooting
+details. For firmware requirements, model selection, startup, controls, save states,
+and persistent device state, see the [RetroArch Core guide](RetroArch-Core.md).
 
 ## Building for Android
 
@@ -59,9 +61,10 @@ The compiled core will be at:
 2. **Copy the core** to RetroArch's cores directory:
    - Internal storage: `RetroArch/cores/`
    - Or use RetroArch's built-in core updater
-3. **Copy firmware files** to RetroArch's system directory:
-   - Internal storage: `RetroArch/system/WQXEmu/`
-4. **Launch RetroArch**, load the WQXEmu core, select the machine in **Core Options**, and use **Start Core**
+3. In **Settings → Directory**, note RetroArch's **System/BIOS** directory and make
+   sure Android has granted RetroArch access to it
+4. Install the firmware under that directory and start the machine as described in
+   the [common guide](RetroArch-Core.md#starting-a-machine)
 
 ### Manual Installation
 
@@ -84,97 +87,31 @@ The compiled core will be at:
 | x86_64 | x86_64-linux-android | ✅ Supported |
 | x86 | i686-linux-android | ⚠️ Experimental |
 
-## Configuration
+## Android Storage
 
-### Firmware Placement
+The actual directory depends on the RetroArch distribution and Android storage
+permissions. `/sdcard/RetroArch/` is a common manual-install location, but the
+paths shown under **Settings → Directory** are authoritative.
 
-Place firmware files in RetroArch's system directory:
+- Place the model directories from the [firmware table](RetroArch-Core.md#firmware-file-requirements)
+  below the configured **System/BIOS** directory as `WQXEmu/<model>/`
+- Grant RetroArch access when Android shows the storage access framework picker
+- If external storage is not visible to RetroArch, use its app-specific directory
+  or another directory selected through RetroArch itself
+- Android logs are commonly stored under `/sdcard/RetroArch/logs/`; confirm the
+  configured log directory for the installed distribution
 
-```
-/sdcard/RetroArch/system/WQXEmu/
-├── nc1020/
-│   ├── obj_lu.bin
-│   └── nc1020.fls
-├── pc1000/
-│   ├── pc1000.rom
-│   └── pc1000.fls
-├── cc800/
-│   ├── obj.bin
-│   └── cc800.fls
-├── nc2000/
-│   ├── nc2000.nor
-│   ├── nc2000.nand
-│   └── nc2000.nand0
-└── nc3000/
-    ├── nc3000.nor
-    ├── nc3000.nand
-    └── nc3000.nand0    # Optional
-```
+## Android-Specific Troubleshooting
 
-These paths and filenames are fixed. NC1020, PC1000, CC800, and NC2000 require
-every file shown for that model. NC3000 requires its NOR and NAND files; NAND0 is
-optional. Firmware is system data and cannot be selected with **Load Content**.
+1. **The core does not appear or load** — Install the `.so` matching the device ABI;
+   prefer `arm64-v8a` on modern 64-bit devices
+2. **Firmware is present but reported missing** — Recheck **Settings → Directory →
+   System/BIOS** and Android's storage permission for that directory
+3. **ADB copied files are not visible** — Select a directory exposed to RetroArch
+   through Android's storage access framework, then copy the files there
 
-### Core Options
-
-Select **Machine Model** to choose NC1020, PC1000, CC800, NC2000, or NC3000. NC1020
-is the default. Restart the core after changing the model. Use RetroArch's frontend
-settings for display, audio, and input configuration.
-
-### Starting the Core
-
-1. Select **Load Core → WQXEmu**
-2. Select **Start Core**; the initial default is NC1020
-3. To use another model, select **Quick Menu → Core Options → Machine Model**
-4. Select **Quick Menu → Close Content**, then **Start Core** again
-
-### Persistent Device State
-
-Source firmware remains read-only. On a normal unload or shutdown, the core saves
-a compressed session under RetroArch's configured save directory as
-`<model>/<firmware fingerprint>.wqxs`. The same model and firmware set resume that
-session automatically. An abnormal app termination cannot flush current changes.
-
-## Performance Tips
-
-1. **Use arm64-v8a** — Best performance for modern devices
-2. **Close background apps** — Free up memory and CPU
-3. **Use a gamepad** — Better control than touchscreen
-4. **Adjust frontend latency** — Use RetroArch's audio and video latency settings if needed
-
-## Troubleshooting
-
-### Common Issues
-
-1. **"Core failed to load"** — Ensure the core file is in the correct location
-2. **"Missing firmware"** — Check the exact system-directory paths for the selected model and storage permissions
-3. **"Black screen"** — Try a different firmware version
-4. **"Audio crackling"** — Adjust RetroArch's frontend audio latency settings
-
-### Debug Logging
-
-Enable debug logging in RetroArch:
-
-1. Go to **Settings → Logging**
-2. Set **Logging Verbosity** to **Debug**
-3. Check logs at `/sdcard/RetroArch/logs/`
-
-### Performance Issues
-
-If you experience performance issues:
-
-1. Check CPU usage in RetroArch's **Quick Menu → Information**
-2. Try increasing RetroArch's audio latency
-3. Disable unnecessary frontend video filters and shaders
-4. Close other apps running in the background
-
-## Building with Android Studio
-
-If you prefer using Android Studio:
-
-1. Open the project in Android Studio
-2. Build the core using Gradle
-3. Copy the built core to RetroArch
+For emulator-level errors and logging settings, use the
+[common troubleshooting guide](RetroArch-Core.md#troubleshooting).
 
 ## Resources
 

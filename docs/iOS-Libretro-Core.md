@@ -1,6 +1,8 @@
 # iOS Libretro Core
 
-This guide covers building and using the WQXEmu libretro core on iOS.
+This guide covers iOS-specific build, signing, installation, and sandbox details.
+For firmware requirements, model selection, startup, controls, save states, and
+persistent device state, see the [RetroArch Core guide](RetroArch-Core.md).
 
 ## Building for iOS
 
@@ -34,39 +36,22 @@ The compiled core will be at:
 - `target/x86_64-apple-ios/release/libwqxemu_libretro.dylib`
 - `target/aarch64-apple-ios-sim/release/libwqxemu_libretro.dylib`
 
-## Installation
+## Integrating the Core into RetroArch
 
-### Using RetroArch on iOS
+iOS does not allow RetroArch to install or update executable cores at runtime.
+The WQXEmu `.dylib` must be included in the RetroArch application before the app
+is signed and installed:
 
-RetroArch on iOS requires manual core injection due to Apple's restrictions.
+1. Build `libwqxemu_libretro.dylib` for the target device architecture
+2. Copy it into RetroArch's source tree at `pkg/apple/iOS/modules/`
+3. Build or archive RetroArch with Xcode so the application and core are signed
+   together
+4. Install the resulting application through Xcode or the chosen signed-app
+   distribution workflow
 
-#### Method 1: Using AltStore
-
-1. **Install AltStore** on your iOS device
-2. **Install RetroArch** through AltStore
-3. **Copy the core** to RetroArch's cores directory:
-   - Use AltStore's file sharing feature
-   - Or use iCloud Drive
-
-#### Method 2: Using Sideloadly
-
-1. **Install Sideloadly** on your computer
-2. **Sideload RetroArch** to your iOS device
-3. **Copy the core** using Sideloadly's file sharing
-
-#### Method 3: Using TestFlight
-
-1. **Join the RetroArch TestFlight** beta
-2. **Install RetroArch** through TestFlight
-3. **Copy the core** using iTunes File Sharing
-
-### Manual Installation
-
-1. Connect your iOS device to your computer
-2. Open **Finder** (macOS Catalina or later) or **iTunes**
-3. Select your device and go to **Files** tab
-4. Find **RetroArch** in the app list
-5. Copy the core file to RetroArch's documents
+Copying a `.dylib` into an already installed App Store, TestFlight, or sideloaded
+RetroArch build does not add a usable core. The application must be rebuilt and
+resigned with WQXEmu included.
 
 ## Supported iOS Architectures
 
@@ -76,100 +61,31 @@ RetroArch on iOS requires manual core injection due to Apple's restrictions.
 | x86_64 (Intel simulator) | x86_64-apple-ios | ✅ Supported |
 | arm64 (Apple Silicon simulator) | aarch64-apple-ios-sim | ✅ Supported |
 
-## Configuration
+## iOS Application Sandbox
 
-### Firmware Placement
+Run RetroArch once so iOS creates its application folders, then use the Files app
+under **On My iPhone/iPad → RetroArch**, or Finder file sharing, to transfer the
+firmware. Check **Settings → Directory → System/BIOS** inside RetroArch rather than
+assuming a fixed filesystem path.
 
-Place firmware files in RetroArch's system directory:
+Create the `WQXEmu/<model>/` hierarchy from the
+[common firmware guide](RetroArch-Core.md#firmware-file-placement) inside that
+configured system directory. Firmware and save data remain inside RetroArch's app
+sandbox unless exported through Files or Finder.
 
-```
-RetroArch/
-└── system/
-    └── WQXEmu/
-        ├── nc1020/
-        │   ├── obj_lu.bin
-        │   └── nc1020.fls
-        ├── pc1000/
-        │   ├── pc1000.rom
-        │   └── pc1000.fls
-        ├── cc800/
-        │   ├── obj.bin
-        │   └── cc800.fls
-        ├── nc2000/
-        │   ├── nc2000.nor
-        │   ├── nc2000.nand
-        │   └── nc2000.nand0
-        └── nc3000/
-            ├── nc3000.nor
-            ├── nc3000.nand
-            └── nc3000.nand0    # Optional
-```
+## iOS-Specific Troubleshooting
 
-These paths and filenames are fixed. NC1020, PC1000, CC800, and NC2000 require
-every file shown for that model. NC3000 requires its NOR and NAND files; NAND0 is
-optional. Firmware is system data and cannot be selected with **Load Content**.
+1. **WQXEmu does not appear in the core list** — Confirm the `.dylib` was placed in
+   `pkg/apple/iOS/modules/` before building RetroArch
+2. **The core fails to load** — Verify the core is built for the device architecture
+   and signed as part of the application bundle
+3. **Firmware copied with Files is not found** — Compare its location with
+   **Settings → Directory → System/BIOS** inside RetroArch
+4. **A sideloaded build stops launching** — Check its provisioning profile and
+   resign or reinstall the application when required
 
-### Core Options
-
-Select **Machine Model** to choose NC1020, PC1000, CC800, NC2000, or NC3000. NC1020
-is the default. Restart the core after changing the model. Use RetroArch's frontend
-settings for display, audio, and input configuration.
-
-### Starting the Core
-
-1. Select **Load Core → WQXEmu**
-2. Select **Start Core**; the initial default is NC1020
-3. To use another model, select **Quick Menu → Core Options → Machine Model**
-4. Select **Quick Menu → Close Content**, then **Start Core** again
-
-### Persistent Device State
-
-Source firmware remains read-only. On a normal unload or shutdown, the core saves
-a compressed session under RetroArch's configured save directory as
-`<model>/<firmware fingerprint>.wqxs`. The same model and firmware set resume that
-session automatically. An abnormal app termination cannot flush current changes.
-
-## Performance Tips
-
-1. **Use real device** — Better performance than simulator
-2. **Close background apps** — Free up memory and CPU
-3. **Use a gamepad** — Better control than touchscreen
-4. **Adjust frontend latency** — Use RetroArch's audio and video latency settings if needed
-
-## Troubleshooting
-
-### Common Issues
-
-1. **"Core failed to load"** — Ensure the core file is in the correct location
-2. **"Missing firmware"** — Check the exact system-directory paths for the selected model
-3. **"Black screen"** — Try a different firmware version
-4. **"Audio crackling"** — Adjust RetroArch's frontend audio latency settings
-5. **"App crashes on startup"** — Check iOS version compatibility
-
-### Debug Logging
-
-Enable debug logging in RetroArch:
-
-1. Go to **Settings → Logging**
-2. Set **Logging Verbosity** to **Debug**
-3. Check logs in RetroArch's logging section
-
-### Performance Issues
-
-If you experience performance issues:
-
-1. Check CPU usage in RetroArch's **Quick Menu → Information**
-2. Try increasing RetroArch's audio latency
-3. Disable unnecessary frontend video filters and shaders
-4. Close other apps running in the background
-
-## Building with Xcode
-
-If you prefer using Xcode:
-
-1. Create a new Xcode project
-2. Add the Rust library as a dependency
-3. Build and run on your device
+For emulator-level errors and logging settings, use the
+[common troubleshooting guide](RetroArch-Core.md#troubleshooting).
 
 ## Resources
 
