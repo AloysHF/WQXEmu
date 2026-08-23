@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::ptr;
 
 use wqxemu_core::save::{read_persistent_state_file, write_persistent_state_file};
-use wqxemu_core::{key_id_for, layout_for, Emulator, MachineModel, LCD_HEIGHT, LCD_WIDTH};
+use wqxemu_core::{key_id_for_host_key, Emulator, HostKey, MachineModel, LCD_HEIGHT, LCD_WIDTH};
 
 // ============================================================
 // libretro constants
@@ -370,45 +370,34 @@ fn serialized_state_payload(model: MachineModel, data: &[u8]) -> Option<&[u8]> {
     data.get(SERIALIZATION_HEADER_SIZE..end)
 }
 
-fn key_id_for_token(model: MachineModel, token: &str) -> Option<u8> {
-    layout_for(model)
-        .iter()
-        .find(|key| {
-            key.label
-                .split('/')
-                .chain(key.hint.split('/'))
-                .any(|alias| alias == token)
-        })
-        .map(|key| key_id_for(model, key.row, key.col))
+fn retro_host_key(keycode: u32) -> Option<HostKey> {
+    let host_key = match keycode {
+        RETROK_RETURN => HostKey::Return,
+        RETROK_ESCAPE => HostKey::Escape,
+        RETROK_SPACE => HostKey::Space,
+        RETROK_BACKSPACE => HostKey::Backspace,
+        RETROK_DELETE => HostKey::Delete,
+        RETROK_UP => HostKey::Up,
+        RETROK_DOWN => HostKey::Down,
+        RETROK_LEFT => HostKey::Left,
+        RETROK_RIGHT => HostKey::Right,
+        RETROK_PAGEUP => HostKey::PageUp,
+        RETROK_PAGEDOWN => HostKey::PageDown,
+        key if (RETROK_F1..=RETROK_F12).contains(&key) => {
+            HostKey::Function((key - RETROK_F1 + 1) as u8)
+        }
+        key if (RETROK_A..=RETROK_Z).contains(&key) => {
+            HostKey::Letter(char::from_u32(key)?.to_ascii_uppercase())
+        }
+        key if (RETROK_0..=RETROK_9).contains(&key) => HostKey::Digit((key - RETROK_0) as u8),
+        _ => return None,
+    };
+    Some(host_key)
 }
 
 /// Map a RetroArch keyboard keycode to the active model's keypad matrix.
 fn map_keyboard_key(model: MachineModel, keycode: u32) -> Option<u8> {
-    let token = match keycode {
-        RETROK_RETURN => "ENT".to_owned(),
-        RETROK_ESCAPE => "ESC".to_owned(),
-        RETROK_SPACE => "SPC".to_owned(),
-        RETROK_BACKSPACE => "F2".to_owned(),
-        RETROK_UP => "UP".to_owned(),
-        RETROK_DOWN => "DN".to_owned(),
-        RETROK_LEFT => "LT".to_owned(),
-        RETROK_RIGHT => "RT".to_owned(),
-        RETROK_PAGEUP => "PGUP".to_owned(),
-        RETROK_PAGEDOWN => "PGDN".to_owned(),
-        RETROK_DELETE if model == MachineModel::Nc1020 => "DEL".to_owned(),
-        RETROK_DELETE => "F12".to_owned(),
-        key if (RETROK_F1..=RETROK_F12).contains(&key) => {
-            format!("F{}", key - RETROK_F1 + 1)
-        }
-        key if (RETROK_A..=RETROK_Z).contains(&key) => char::from_u32(key)
-            .unwrap()
-            .to_ascii_uppercase()
-            .to_string(),
-        key if (RETROK_0..=RETROK_9).contains(&key) => char::from_u32(key).unwrap().to_string(),
-        _ => return None,
-    };
-
-    key_id_for_token(model, &token)
+    key_id_for_host_key(model, retro_host_key(keycode)?)
 }
 
 /// Map a RetroPad button to the active model's keypad matrix.
@@ -429,7 +418,22 @@ fn map_joypad_button(model: MachineModel, button: u32) -> Option<u8> {
         _ => return None,
     };
 
-    key_id_for_token(model, token)
+    let host_key = match token {
+        "UP" => HostKey::Up,
+        "DN" => HostKey::Down,
+        "LT" => HostKey::Left,
+        "RT" => HostKey::Right,
+        "ENT" => HostKey::Return,
+        "ESC" => HostKey::Escape,
+        "F1" => HostKey::Function(1),
+        "F4" => HostKey::Function(4),
+        "PGUP" => HostKey::PageUp,
+        "PGDN" => HostKey::PageDown,
+        "F10" => HostKey::Function(10),
+        "F11" => HostKey::Function(11),
+        _ => return None,
+    };
+    key_id_for_host_key(model, host_key)
 }
 
 unsafe extern "C" fn keyboard_event(

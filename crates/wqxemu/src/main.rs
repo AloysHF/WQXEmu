@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 
 use wqxemu_core::save::{read_persistent_state_file, write_persistent_state_file};
 use wqxemu_core::{
-    detect_model, key_ids, layout_for, Emulator, MachineModel, RomFiles, LCD_HEIGHT, LCD_WIDTH,
+    detect_model, key_id_for_host_key, layout_for, Emulator, HostKey, MachineModel, RomFiles,
+    LCD_HEIGHT, LCD_WIDTH,
 };
 
 mod keypad;
@@ -68,284 +69,74 @@ struct Args {
     screenshot_frames: u32,
 }
 
-/// Map minifb key to a key ID for the given model.
-///
-/// Key IDs encode the 8x8 matrix position: row = key_id >> 3,
-/// col = key_id & 7. The PC1000/CC800 use a different physical matrix
-/// than the NC1020/NC2000, so the mapping is model-specific.
+fn minifb_host_key(key: Key) -> Option<HostKey> {
+    let host_key = match key {
+        Key::A => HostKey::Letter('A'),
+        Key::B => HostKey::Letter('B'),
+        Key::C => HostKey::Letter('C'),
+        Key::D => HostKey::Letter('D'),
+        Key::E => HostKey::Letter('E'),
+        Key::F => HostKey::Letter('F'),
+        Key::G => HostKey::Letter('G'),
+        Key::H => HostKey::Letter('H'),
+        Key::I => HostKey::Letter('I'),
+        Key::J => HostKey::Letter('J'),
+        Key::K => HostKey::Letter('K'),
+        Key::L => HostKey::Letter('L'),
+        Key::M => HostKey::Letter('M'),
+        Key::N => HostKey::Letter('N'),
+        Key::O => HostKey::Letter('O'),
+        Key::P => HostKey::Letter('P'),
+        Key::Q => HostKey::Letter('Q'),
+        Key::R => HostKey::Letter('R'),
+        Key::S => HostKey::Letter('S'),
+        Key::T => HostKey::Letter('T'),
+        Key::U => HostKey::Letter('U'),
+        Key::V => HostKey::Letter('V'),
+        Key::W => HostKey::Letter('W'),
+        Key::X => HostKey::Letter('X'),
+        Key::Y => HostKey::Letter('Y'),
+        Key::Z => HostKey::Letter('Z'),
+        Key::Key0 => HostKey::Digit(0),
+        Key::Key1 => HostKey::Digit(1),
+        Key::Key2 => HostKey::Digit(2),
+        Key::Key3 => HostKey::Digit(3),
+        Key::Key4 => HostKey::Digit(4),
+        Key::Key5 => HostKey::Digit(5),
+        Key::Key6 => HostKey::Digit(6),
+        Key::Key7 => HostKey::Digit(7),
+        Key::Key8 => HostKey::Digit(8),
+        Key::Key9 => HostKey::Digit(9),
+        Key::F1 => HostKey::Function(1),
+        Key::F2 => HostKey::Function(2),
+        Key::F3 => HostKey::Function(3),
+        Key::F4 => HostKey::Function(4),
+        Key::F5 => HostKey::Function(5),
+        Key::F6 => HostKey::Function(6),
+        Key::F7 => HostKey::Function(7),
+        Key::F8 => HostKey::Function(8),
+        Key::F9 => HostKey::Function(9),
+        Key::F10 => HostKey::Function(10),
+        Key::F11 => HostKey::Function(11),
+        Key::F12 => HostKey::Function(12),
+        Key::Enter => HostKey::Return,
+        Key::Escape => HostKey::Escape,
+        Key::Space => HostKey::Space,
+        Key::Backspace => HostKey::Backspace,
+        Key::Delete => HostKey::Delete,
+        Key::Up => HostKey::Up,
+        Key::Down => HostKey::Down,
+        Key::Left => HostKey::Left,
+        Key::Right => HostKey::Right,
+        Key::PageUp => HostKey::PageUp,
+        Key::PageDown => HostKey::PageDown,
+        _ => return None,
+    };
+    Some(host_key)
+}
+
 fn map_key(model: MachineModel, key: Key) -> Option<u8> {
-    match model {
-        MachineModel::Pc1000 | MachineModel::Cc800 => map_key_pc1000(key),
-        MachineModel::Nc2000 => map_key_nc2000(key),
-        MachineModel::Nc3000 => map_key_nc3000(key),
-        _ => map_key_nc1020(key),
-    }
-}
-
-/// Map minifb key to NC2000 key ID (matrix position).
-///
-/// The NC2000 shares the NC2000-era QWERTY matrix with the NC3000 but
-/// keeps its hotkeys in matrix column 1 (英汉/名片/计算/行程/资料/时间/
-/// 网络) and the power key at (0,0).
-fn map_key_nc2000(key: Key) -> Option<u8> {
-    let id = |row: u8, col: u8| row << 3 | col;
-    map_qwerty_2000(key).or_else(|| match key {
-        Key::F5 => Some(id(3, 1)),                // 英汉
-        Key::F6 => Some(id(4, 1)),                // 名片
-        Key::F7 => Some(id(5, 1)),                // 计算
-        Key::F8 => Some(id(2, 1)),                // 行程
-        Key::F9 => Some(id(1, 1)),                // 资料
-        Key::F10 => Some(id(0, 1)),               // 时间
-        Key::F11 => Some(id(6, 1)),               // 网络
-        Key::F12 | Key::Delete => Some(id(0, 0)), // ON/OFF
-        _ => None,
-    })
-}
-
-/// QWERTY block shared by the NC2000/NC3000 keypads.
-fn map_qwerty_2000(key: Key) -> Option<u8> {
-    let id = |row: u8, col: u8| row << 3 | col;
-    match key {
-        Key::Up => Some(id(2, 3)),
-        Key::Down => Some(id(3, 3)),
-        Key::Left => Some(id(7, 7)),
-        Key::Right => Some(id(7, 3)),
-        Key::Enter => Some(id(5, 3)),
-        Key::Escape => Some(id(3, 7)),
-        Key::Space => Some(id(6, 7)),
-        Key::Backspace => Some(id(1, 2)), // F2 = 删除
-        Key::F1 => Some(id(0, 2)),
-        Key::F2 => Some(id(1, 2)),
-        Key::F3 => Some(id(2, 2)),
-        Key::F4 => Some(id(3, 2)),
-        Key::A => Some(id(0, 5)),
-        Key::B => Some(id(4, 6)),
-        Key::C => Some(id(2, 6)),
-        Key::D => Some(id(2, 5)),
-        Key::E => Some(id(2, 4)),
-        Key::F => Some(id(3, 5)),
-        Key::G => Some(id(4, 5)),
-        Key::H => Some(id(5, 5)),
-        Key::I => Some(id(7, 4)),
-        Key::J => Some(id(6, 5)),
-        Key::K => Some(id(7, 5)),
-        Key::L => Some(id(1, 3)),
-        Key::M => Some(id(6, 6)),
-        Key::N => Some(id(5, 6)),
-        Key::O => Some(id(0, 3)),
-        Key::P => Some(id(4, 3)),
-        Key::Q => Some(id(0, 4)),
-        Key::R => Some(id(3, 4)),
-        Key::S => Some(id(1, 5)),
-        Key::T => Some(id(4, 4)),
-        Key::U => Some(id(6, 4)),
-        Key::V => Some(id(3, 6)),
-        Key::W => Some(id(1, 4)),
-        Key::X => Some(id(1, 6)),
-        Key::Y => Some(id(5, 4)),
-        Key::Z => Some(id(0, 6)),
-        Key::Key0 => Some(id(4, 7)),
-        Key::Key1 => Some(id(4, 6)),
-        Key::Key2 => Some(id(5, 6)),
-        Key::Key3 => Some(id(6, 6)),
-        Key::Key4 => Some(id(4, 5)),
-        Key::Key5 => Some(id(5, 5)),
-        Key::Key6 => Some(id(6, 5)),
-        Key::Key7 => Some(id(4, 4)),
-        Key::Key8 => Some(id(5, 4)),
-        Key::Key9 => Some(id(6, 4)),
-        _ => None,
-    }
-}
-
-/// Map minifb key to NC1020/NC2000 key ID.
-fn map_key_nc1020(key: Key) -> Option<u8> {
-    match key {
-        // Arrow keys
-        Key::Up => Some(key_ids::UP),
-        Key::Down => Some(key_ids::DOWN),
-        Key::Left => Some(key_ids::LEFT),
-        Key::Right => Some(key_ids::RIGHT),
-
-        // Enter
-        Key::Enter => Some(key_ids::ENTER),
-
-        // Escape -> ESC
-        Key::Escape => Some(key_ids::ESC),
-
-        // Space
-        Key::Space => Some(key_ids::SPACE),
-
-        // Backspace
-        Key::Backspace => Some(key_ids::BACKSPACE),
-
-        // F keys
-        Key::F1 => Some(key_ids::F1),
-        Key::F2 => Some(key_ids::F2),
-        Key::F3 => Some(key_ids::F3),
-        Key::F4 => Some(key_ids::F4),
-        Key::F5 => Some(key_ids::F5),
-        Key::F6 => Some(key_ids::F6),
-        Key::F7 => Some(key_ids::F7),
-        Key::F8 => Some(key_ids::F8),
-        Key::F9 => Some(key_ids::F9),
-        Key::F10 => Some(key_ids::F10),
-        Key::F11 => Some(key_ids::F11),
-
-        // Page Up/Down
-        Key::PageUp => Some(key_ids::PAGE_UP),
-        Key::PageDown => Some(key_ids::PAGE_DOWN),
-
-        // Power button (mapped to Delete)
-        Key::Delete => Some(key_ids::POWER),
-
-        // Letter keys
-        Key::A => Some(0x28),
-        Key::B => Some(0x34),
-        Key::C => Some(0x32),
-        Key::D => Some(0x2A),
-        Key::E => Some(0x22),
-        Key::F => Some(0x2B),
-        Key::G => Some(0x2C),
-        Key::H => Some(0x2D),
-        Key::I => Some(0x27),
-        Key::J => Some(0x2E),
-        Key::K => Some(0x2F),
-        Key::L => Some(0x19),
-        Key::M => Some(0x36),
-        Key::N => Some(0x35),
-        Key::O => Some(0x18),
-        Key::P => Some(0x1C),
-        Key::Q => Some(0x20),
-        Key::R => Some(0x23),
-        Key::S => Some(0x29),
-        Key::T => Some(0x24),
-        Key::U => Some(0x26),
-        Key::V => Some(0x33),
-        Key::W => Some(0x21),
-        Key::X => Some(0x31),
-        Key::Y => Some(0x25),
-        Key::Z => Some(0x30),
-
-        // Number keys
-        Key::Key0 => Some(0x3C),
-        Key::Key1 => Some(0x34),
-        Key::Key2 => Some(0x35),
-        Key::Key3 => Some(0x36),
-        Key::Key4 => Some(0x2C),
-        Key::Key5 => Some(0x2D),
-        Key::Key6 => Some(0x2E),
-        Key::Key7 => Some(0x24),
-        Key::Key8 => Some(0x25),
-        Key::Key9 => Some(0x26),
-
-        _ => None,
-    }
-}
-
-/// Map minifb key to PC1000 key ID (matrix position).
-///
-/// PC1000 matrix layout (from the PC1000 reference keymap):
-///   row 0: ON/OFF        row 4: A S D F G H J K
-///   row 1: 英汉 名片 计算 行程 资料 时间 网络
-///   row 2: 求助 中英数 输入法 跳出 0 . 空格 ←
-///   row 3: Z X C V B N M ⇞
-///   row 5: Q W E R T Y U I
-///   row 6: O L ▲ ▼ P 输入 ⇟ →
-///   row 7: F1 F2 F3 F4
-fn map_key_pc1000(key: Key) -> Option<u8> {
-    let id = |row: u8, col: u8| row << 3 | col;
-    match key {
-        // Arrows / navigation
-        Key::Up => Some(id(6, 2)),
-        Key::Down => Some(id(6, 3)),
-        Key::Left => Some(id(2, 7)),
-        Key::Right => Some(id(6, 7)),
-        Key::Enter => Some(id(6, 5)),
-        Key::Escape => Some(id(2, 3)),
-        Key::Space => Some(id(2, 6)),
-        Key::Backspace => Some(id(7, 3)),
-
-        // Function keys / hotkeys
-        Key::F1 => Some(id(7, 2)),
-        Key::F2 => Some(id(7, 3)),
-        Key::F3 => Some(id(7, 4)),
-        Key::F4 => Some(id(7, 5)),
-        Key::F5 => Some(id(1, 0)),  // 英汉
-        Key::F6 => Some(id(1, 1)),  // 名片
-        Key::F7 => Some(id(1, 2)),  // 计算
-        Key::F8 => Some(id(1, 3)),  // 行程
-        Key::F9 => Some(id(1, 4)),  // 资料
-        Key::F10 => Some(id(1, 5)), // 时间
-        Key::F11 => Some(id(1, 6)), // 网络
-
-        // Power button (Delete)
-        Key::Delete => Some(id(0, 0)),
-
-        // Letters
-        Key::A => Some(id(4, 0)),
-        Key::B => Some(id(3, 4)),
-        Key::C => Some(id(3, 2)),
-        Key::D => Some(id(4, 2)),
-        Key::E => Some(id(5, 2)),
-        Key::F => Some(id(4, 3)),
-        Key::G => Some(id(4, 4)),
-        Key::H => Some(id(4, 5)),
-        Key::I => Some(id(5, 7)),
-        Key::J => Some(id(4, 6)),
-        Key::K => Some(id(4, 7)),
-        Key::L => Some(id(6, 1)),
-        Key::M => Some(id(3, 6)),
-        Key::N => Some(id(3, 5)),
-        Key::O => Some(id(6, 0)),
-        Key::P => Some(id(6, 4)),
-        Key::Q => Some(id(5, 0)),
-        Key::R => Some(id(5, 3)),
-        Key::S => Some(id(4, 1)),
-        Key::T => Some(id(5, 4)),
-        Key::U => Some(id(5, 6)),
-        Key::V => Some(id(3, 3)),
-        Key::W => Some(id(5, 1)),
-        Key::X => Some(id(3, 1)),
-        Key::Y => Some(id(5, 5)),
-        Key::Z => Some(id(3, 0)),
-
-        // Numbers
-        Key::Key0 => Some(id(2, 4)),
-        Key::Key1 => Some(id(3, 4)),
-        Key::Key2 => Some(id(3, 5)),
-        Key::Key3 => Some(id(3, 6)),
-        Key::Key4 => Some(id(4, 4)),
-        Key::Key5 => Some(id(4, 5)),
-        Key::Key6 => Some(id(4, 6)),
-        Key::Key7 => Some(id(5, 4)),
-        Key::Key8 => Some(id(5, 5)),
-        Key::Key9 => Some(id(5, 6)),
-
-        _ => None,
-    }
-}
-
-/// Map minifb key to NC3000 key ID (matrix position).
-///
-/// The NC3000 shares the standard NC2000-era QWERTY matrix plus its own
-/// hotkey column (col 0): 网络/电源 (0,0), 游戏 (1,0), 计算 (2,0),
-/// 时间 (3,0), 英汉 (5,0), 词库 (6,0), 学习 (7,0).
-fn map_key_nc3000(key: Key) -> Option<u8> {
-    let id = |row: u8, col: u8| row << 3 | col;
-    map_qwerty_2000(key).or_else(|| match key {
-        // Hotkey column 0 (from the NC3000 keymap):
-        // 网络/电源 (0,0), 游戏 (1,0), 计算 (2,0), 时间 (3,0),
-        // 英汉 (5,0), 词库 (6,0), 学习 (7,0).
-        Key::F5 => Some(id(1, 0)),                // 游戏
-        Key::F6 => Some(id(2, 0)),                // 计算
-        Key::F7 => Some(id(3, 0)),                // 时间
-        Key::F9 => Some(id(5, 0)),                // 英汉
-        Key::F10 => Some(id(6, 0)),               // 词库
-        Key::F11 => Some(id(7, 0)),               // 学习
-        Key::F12 | Key::Delete => Some(id(0, 0)), // 网络/电源
-        _ => None,
-    })
+    key_id_for_host_key(model, minifb_host_key(key)?)
 }
 
 /// Map a resized window coordinate through the aspect-ratio letterbox.
@@ -634,7 +425,7 @@ fn save_screenshot(pixels: &[u32], path: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        map_key_nc1020, validate_firmware_files, validate_state_file_path, window_to_skin_pos, Args,
+        map_key, validate_firmware_files, validate_state_file_path, window_to_skin_pos, Args,
     };
     use clap::Parser;
     use minifb::Key;
@@ -755,11 +546,11 @@ mod tests {
 
     #[test]
     fn nc1020_pc_keyboard_uses_reference_matrix_ids() {
-        assert_eq!(map_key_nc1020(Key::F5), Some(key_ids::F5));
-        assert_eq!(map_key_nc1020(Key::F9), Some(key_ids::F9));
-        assert_eq!(map_key_nc1020(Key::Q), Some(0x20));
-        assert_eq!(map_key_nc1020(Key::A), Some(0x28));
-        assert_eq!(map_key_nc1020(Key::Space), Some(0x3E));
-        assert_eq!(map_key_nc1020(Key::Key1), Some(0x34));
+        assert_eq!(map_key(MachineModel::Nc1020, Key::F5), Some(key_ids::F5));
+        assert_eq!(map_key(MachineModel::Nc1020, Key::F9), Some(key_ids::F9));
+        assert_eq!(map_key(MachineModel::Nc1020, Key::Q), Some(0x20));
+        assert_eq!(map_key(MachineModel::Nc1020, Key::A), Some(0x28));
+        assert_eq!(map_key(MachineModel::Nc1020, Key::Space), Some(0x3E));
+        assert_eq!(map_key(MachineModel::Nc1020, Key::Key1), Some(0x34));
     }
 }

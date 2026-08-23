@@ -9,6 +9,28 @@
 
 use crate::machine::MachineModel;
 
+/// A frontend-independent physical keyboard key.
+///
+/// Frontends translate their native key codes into this type so every
+/// frontend uses the same Wenquxing keypad mapping.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum HostKey {
+    Letter(char),
+    Digit(u8),
+    Function(u8),
+    Return,
+    Escape,
+    Space,
+    Backspace,
+    Delete,
+    Up,
+    Down,
+    Left,
+    Right,
+    PageUp,
+    PageDown,
+}
+
 /// A single on-screen key.
 ///
 /// `drow`/`dcol` are the physical display position (6 rows x 10 cols,
@@ -40,6 +62,64 @@ pub fn key_id_for(model: MachineModel, row: u8, col: u8) -> u8 {
         MachineModel::Nc1020 => (col << 3) | row,
         _ => (row << 3) | col,
     }
+}
+
+fn key_has_alias(key: &KeyDef, expected: &str) -> bool {
+    key.label
+        .split('/')
+        .chain(key.hint.split('/'))
+        .any(|alias| alias == expected)
+}
+
+/// Resolve a physical keyboard key to the active model's keypad matrix.
+pub fn key_id_for_host_key(model: MachineModel, host_key: HostKey) -> Option<u8> {
+    let fixed_alias = match host_key {
+        HostKey::Return => Some("ENT"),
+        HostKey::Escape => Some("ESC"),
+        HostKey::Space => Some("SPC"),
+        HostKey::Backspace => Some("F2"),
+        HostKey::Delete | HostKey::Function(12) if model == MachineModel::Nc1020 => Some("DEL"),
+        HostKey::Delete => Some("F12"),
+        HostKey::Up => Some("UP"),
+        HostKey::Down => Some("DN"),
+        HostKey::Left => Some("LT"),
+        HostKey::Right => Some("RT"),
+        HostKey::PageUp => Some("PGUP"),
+        HostKey::PageDown => Some("PGDN"),
+        HostKey::Letter(_) | HostKey::Digit(_) | HostKey::Function(_) => None,
+    };
+
+    layout_for(model)
+        .iter()
+        .find(|key| match host_key {
+            HostKey::Function(12) if model == MachineModel::Nc1020 => key_has_alias(key, "DEL"),
+            HostKey::Letter(letter) if letter.is_ascii_alphabetic() => {
+                let expected = letter.to_ascii_uppercase();
+                key.label
+                    .split('/')
+                    .chain(key.hint.split('/'))
+                    .any(|alias| alias.len() == 1 && alias.starts_with(expected))
+            }
+            HostKey::Digit(digit) if digit <= 9 => {
+                let expected = char::from(b'0' + digit);
+                key.label
+                    .split('/')
+                    .chain(key.hint.split('/'))
+                    .any(|alias| alias.len() == 1 && alias.starts_with(expected))
+            }
+            HostKey::Function(number) if (1..=12).contains(&number) => key
+                .label
+                .split('/')
+                .chain(key.hint.split('/'))
+                .any(|alias| {
+                    alias
+                        .strip_prefix('F')
+                        .and_then(|value| value.parse::<u8>().ok())
+                        == Some(number)
+                }),
+            _ => fixed_alias.is_some_and(|alias| key_has_alias(key, alias)),
+        })
+        .map(|key| key_id_for(model, key.row, key.col))
 }
 
 /// NC2000 keypad: standard 6x10 keypad with hotkeys in matrix column 1.
@@ -1421,5 +1501,40 @@ mod tests {
             assert_eq!(key_id_for(MachineModel::Nc1020, key.row, key.col), key_id);
         }
         assert_eq!(layout.len(), 52);
+    }
+
+    #[test]
+    fn shared_host_keys_follow_each_models_layout() {
+        let expectations = [
+            (MachineModel::Nc1020, 0x1a),
+            (MachineModel::Pc1000, 0x32),
+            (MachineModel::Cc800, 0x32),
+            (MachineModel::Nc2000, 0x13),
+            (MachineModel::Nc3000, 0x13),
+        ];
+
+        for (model, expected) in expectations {
+            assert_eq!(key_id_for_host_key(model, HostKey::Up), Some(expected));
+        }
+    }
+
+    #[test]
+    fn shared_host_keys_support_aliases_and_power_keys() {
+        assert_eq!(
+            key_id_for_host_key(MachineModel::Nc2000, HostKey::Letter('b')),
+            key_id_for_host_key(MachineModel::Nc2000, HostKey::Digit(1))
+        );
+        for model in [
+            MachineModel::Nc1020,
+            MachineModel::Pc1000,
+            MachineModel::Cc800,
+            MachineModel::Nc2000,
+            MachineModel::Nc3000,
+        ] {
+            assert_eq!(
+                key_id_for_host_key(model, HostKey::Function(12)),
+                key_id_for_host_key(model, HostKey::Delete)
+            );
+        }
     }
 }
