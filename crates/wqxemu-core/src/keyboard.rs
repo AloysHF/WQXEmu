@@ -7,7 +7,126 @@
 // key hint) for each supported model so the desktop frontend can draw a
 // virtual keypad and accept mouse clicks.
 
+use std::collections::HashSet;
+
+use crate::input::KEY_COUNT;
 use crate::machine::MachineModel;
+
+/// A frontend-independent physical keyboard key.
+///
+/// Frontends translate their native key codes into this type so every
+/// frontend uses the same Wenquxing keypad mapping.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum HostKey {
+    Letter(char),
+    Digit(u8),
+    Function(u8),
+    Return,
+    Escape,
+    Space,
+    Backspace,
+    Delete,
+    Up,
+    Down,
+    Left,
+    Right,
+    PageUp,
+    PageDown,
+    Period,
+    Comma,
+    Slash,
+    LeftBracket,
+    RightBracket,
+    Backslash,
+    Equals,
+}
+
+/// Combined frontend input state for keyboard, controller, and pointer input.
+#[derive(Clone, Debug)]
+pub struct FrontendInputState {
+    keyboard: HashSet<HostKey>,
+    controller: HashSet<HostKey>,
+    pointer: Option<u8>,
+    applied: [bool; KEY_COUNT],
+}
+
+impl Default for FrontendInputState {
+    fn default() -> Self {
+        Self {
+            keyboard: HashSet::new(),
+            controller: HashSet::new(),
+            pointer: None,
+            applied: [false; KEY_COUNT],
+        }
+    }
+}
+
+impl FrontendInputState {
+    pub fn set_keyboard_key(&mut self, key: HostKey, pressed: bool) {
+        if pressed {
+            self.keyboard.insert(key);
+        } else {
+            self.keyboard.remove(&key);
+        }
+    }
+
+    pub fn set_controller_key(&mut self, key: HostKey, pressed: bool) {
+        if pressed {
+            self.controller.insert(key);
+        } else {
+            self.controller.remove(&key);
+        }
+    }
+
+    pub fn set_pointer_key(&mut self, key_id: Option<u8>) {
+        self.pointer = key_id.filter(|key_id| (*key_id as usize) < KEY_COUNT);
+    }
+
+    /// Forget the previously applied matrix after the emulated machine resets.
+    pub fn reset_applied(&mut self) {
+        self.applied.fill(false);
+    }
+
+    /// Release every emulated key after loading state that may contain input.
+    pub fn release_all(&mut self, mut set_key: impl FnMut(u8, bool)) {
+        for key_id in 0..KEY_COUNT {
+            set_key(key_id as u8, false);
+        }
+        self.reset_applied();
+    }
+
+    /// Release all frontend inputs and forget the applied matrix.
+    pub fn clear(&mut self) {
+        self.keyboard.clear();
+        self.controller.clear();
+        self.pointer = None;
+        self.reset_applied();
+    }
+
+    pub fn pressed(&self) -> &[bool; KEY_COUNT] {
+        &self.applied
+    }
+
+    /// Merge every input source and emit only keypad matrix changes.
+    pub fn sync(&mut self, model: MachineModel, mut set_key: impl FnMut(u8, bool)) {
+        let mut desired = [false; KEY_COUNT];
+        for host_key in self.keyboard.iter().chain(&self.controller) {
+            if let Some(key_id) = key_id_for_host_key(model, *host_key) {
+                desired[key_id as usize] = true;
+            }
+        }
+        if let Some(key_id) = self.pointer {
+            desired[key_id as usize] = true;
+        }
+
+        for (key_id, (&next, &current)) in desired.iter().zip(&self.applied).enumerate() {
+            if next != current {
+                set_key(key_id as u8, next);
+            }
+        }
+        self.applied = desired;
+    }
+}
 
 /// A single on-screen key.
 ///
@@ -40,6 +159,69 @@ pub fn key_id_for(model: MachineModel, row: u8, col: u8) -> u8 {
         MachineModel::Nc1020 => (col << 3) | row,
         _ => (row << 3) | col,
     }
+}
+
+fn key_has_alias(key: &KeyDef, expected: &str) -> bool {
+    key.label
+        .split('/')
+        .chain(key.hint.split('/'))
+        .any(|alias| alias == expected)
+}
+
+/// Resolve a physical keyboard key to the active model's keypad matrix.
+pub fn key_id_for_host_key(model: MachineModel, host_key: HostKey) -> Option<u8> {
+    let fixed_alias = match host_key {
+        HostKey::Return => Some("ENT"),
+        HostKey::Escape => Some("ESC"),
+        HostKey::Space => Some("SPC"),
+        HostKey::Equals => Some("SPC"),
+        HostKey::Backspace => Some("F2"),
+        HostKey::Delete | HostKey::Function(12) if model == MachineModel::Nc1020 => Some("DEL"),
+        HostKey::Delete => Some("F12"),
+        HostKey::Up => Some("UP"),
+        HostKey::Down => Some("DN"),
+        HostKey::Left => Some("LT"),
+        HostKey::Right => Some("RT"),
+        HostKey::PageUp | HostKey::Comma => Some("PGUP"),
+        HostKey::PageDown | HostKey::Slash => Some("PGDN"),
+        HostKey::Period => Some("."),
+        HostKey::LeftBracket => Some("HELP"),
+        HostKey::RightBracket => Some("SHIFT"),
+        HostKey::Backslash => Some("IME"),
+        HostKey::Letter(_) | HostKey::Digit(_) | HostKey::Function(_) => None,
+    };
+
+    layout_for(model)
+        .iter()
+        .find(|key| match host_key {
+            HostKey::Function(12) if model == MachineModel::Nc1020 => key_has_alias(key, "DEL"),
+            HostKey::Letter(letter) if letter.is_ascii_alphabetic() => {
+                let expected = letter.to_ascii_uppercase();
+                key.label
+                    .split('/')
+                    .chain(key.hint.split('/'))
+                    .any(|alias| alias.len() == 1 && alias.starts_with(expected))
+            }
+            HostKey::Digit(digit) if digit <= 9 => {
+                let expected = char::from(b'0' + digit);
+                key.label
+                    .split('/')
+                    .chain(key.hint.split('/'))
+                    .any(|alias| alias.len() == 1 && alias.starts_with(expected))
+            }
+            HostKey::Function(number) if (1..=12).contains(&number) => key
+                .label
+                .split('/')
+                .chain(key.hint.split('/'))
+                .any(|alias| {
+                    alias
+                        .strip_prefix('F')
+                        .and_then(|value| value.parse::<u8>().ok())
+                        == Some(number)
+                }),
+            _ => fixed_alias.is_some_and(|alias| key_has_alias(key, alias)),
+        })
+        .map(|key| key_id_for(model, key.row, key.col))
 }
 
 /// NC2000 keypad: standard 6x10 keypad with hotkeys in matrix column 1.
@@ -1421,5 +1603,118 @@ mod tests {
             assert_eq!(key_id_for(MachineModel::Nc1020, key.row, key.col), key_id);
         }
         assert_eq!(layout.len(), 52);
+    }
+
+    #[test]
+    fn shared_host_keys_follow_each_models_layout() {
+        let expectations = [
+            (MachineModel::Nc1020, 0x1a),
+            (MachineModel::Pc1000, 0x32),
+            (MachineModel::Cc800, 0x32),
+            (MachineModel::Nc2000, 0x13),
+            (MachineModel::Nc3000, 0x13),
+        ];
+
+        for (model, expected) in expectations {
+            assert_eq!(key_id_for_host_key(model, HostKey::Up), Some(expected));
+        }
+    }
+
+    #[test]
+    fn shared_host_keys_support_aliases_and_power_keys() {
+        assert_eq!(
+            key_id_for_host_key(MachineModel::Nc2000, HostKey::Letter('b')),
+            key_id_for_host_key(MachineModel::Nc2000, HostKey::Digit(1))
+        );
+        for model in [
+            MachineModel::Nc1020,
+            MachineModel::Pc1000,
+            MachineModel::Cc800,
+            MachineModel::Nc2000,
+            MachineModel::Nc3000,
+        ] {
+            assert_eq!(
+                key_id_for_host_key(model, HostKey::Function(12)),
+                key_id_for_host_key(model, HostKey::Delete)
+            );
+        }
+    }
+
+    #[test]
+    fn shared_host_keys_cover_visible_special_keys() {
+        for model in [
+            MachineModel::Nc1020,
+            MachineModel::Pc1000,
+            MachineModel::Cc800,
+            MachineModel::Nc2000,
+            MachineModel::Nc3000,
+        ] {
+            for host_key in [
+                HostKey::LeftBracket,
+                HostKey::RightBracket,
+                HostKey::Backslash,
+                HostKey::Period,
+                HostKey::Comma,
+                HostKey::Slash,
+                HostKey::Equals,
+            ] {
+                assert!(
+                    key_id_for_host_key(model, host_key).is_some(),
+                    "{host_key:?} is missing for {model:?}"
+                );
+            }
+            assert_eq!(
+                key_id_for_host_key(model, HostKey::Comma),
+                key_id_for_host_key(model, HostKey::PageUp)
+            );
+            assert_eq!(
+                key_id_for_host_key(model, HostKey::Slash),
+                key_id_for_host_key(model, HostKey::PageDown)
+            );
+            assert_eq!(
+                key_id_for_host_key(model, HostKey::Equals),
+                key_id_for_host_key(model, HostKey::Space)
+            );
+        }
+    }
+
+    #[test]
+    fn frontend_input_keeps_same_source_aliases_pressed() {
+        let mut input = FrontendInputState::default();
+        let mut events = Vec::new();
+
+        input.set_keyboard_key(HostKey::Letter('B'), true);
+        input.sync(MachineModel::Nc2000, |key, down| events.push((key, down)));
+        input.set_keyboard_key(HostKey::Digit(1), true);
+        input.sync(MachineModel::Nc2000, |key, down| events.push((key, down)));
+        input.set_keyboard_key(HostKey::Letter('B'), false);
+        input.sync(MachineModel::Nc2000, |key, down| events.push((key, down)));
+
+        assert_eq!(events, vec![(0x26, true)]);
+
+        input.set_keyboard_key(HostKey::Digit(1), false);
+        input.sync(MachineModel::Nc2000, |key, down| events.push((key, down)));
+        assert_eq!(events, vec![(0x26, true), (0x26, false)]);
+    }
+
+    #[test]
+    fn frontend_input_merges_keyboard_controller_and_pointer() {
+        let mut input = FrontendInputState::default();
+        let mut events = Vec::new();
+
+        input.set_keyboard_key(HostKey::Up, true);
+        input.set_controller_key(HostKey::Up, true);
+        input.sync(MachineModel::Nc2000, |key, down| events.push((key, down)));
+        input.set_keyboard_key(HostKey::Up, false);
+        input.sync(MachineModel::Nc2000, |key, down| events.push((key, down)));
+        input.set_pointer_key(Some(0x13));
+        input.set_controller_key(HostKey::Up, false);
+        input.sync(MachineModel::Nc2000, |key, down| events.push((key, down)));
+
+        assert_eq!(events, vec![(0x13, true)]);
+
+        input.set_pointer_key(None);
+        input.sync(MachineModel::Nc2000, |key, down| events.push((key, down)));
+        assert_eq!(events, vec![(0x13, true), (0x13, false)]);
     }
 }

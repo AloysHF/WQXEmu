@@ -38,7 +38,9 @@ pub mod timer;
 // Re-export main types for convenience
 pub use emulator::Emulator;
 pub use input::key_ids;
-pub use keyboard::{key_id_for, layout_for, KeyDef};
+pub use keyboard::{
+    key_id_for, key_id_for_host_key, layout_for, FrontendInputState, HostKey, KeyDef,
+};
 pub use lcd::{LCD_HEIGHT, LCD_WIDTH};
 pub use machine::{Machine, MachineModel, RomFiles};
 pub use machines::detect_model;

@@ -121,25 +121,15 @@ wqx-emu [OPTIONS] [COMMAND]
 
 ## Keyboard Controls
 
-### Navigation
+The standalone frontend uses the same physical keyboard mapping as the
+RetroArch core. It also displays the complete device and accepts mouse clicks on
+the pictured keys.
 
-| Key | Action |
-|-----|--------|
-| Arrow Up | Navigate up |
-| Arrow Down | Navigate down |
-| Arrow Left | Navigate left |
-| Arrow Right | Navigate right |
-| Enter | Confirm / Select |
-| Escape | Back / Cancel / Exit |
+See [Physical Keyboard Controls](Keyboard-Controls.md) for the complete common
+and model-specific mapping.
 
-### Emulator Controls
-
-| Key | Action |
-|-----|--------|
-| F5 | Save state |
-| F8 | Load state |
-| F12 | Take screenshot |
-| Pause | Pause / Resume emulation |
+Escape operates the Wenquxing Escape/Back key. Close the window or use the
+operating system's standard close shortcut to exit the emulator.
 
 ## Headless Mode
 

@@ -99,6 +99,21 @@ entries are conditional: a complete set is required only for the model selected 
 Core Options. The core validates the selected set at startup and reports every
 missing path.
 
+## Physical Keyboard
+
+The core accepts the same physical keyboard mapping as the standalone frontend.
+See [Physical Keyboard Controls](Keyboard-Controls.md) for the complete common
+and model-specific mapping.
+
+Enable RetroArch **Game Focus** before using the keyboard. RetroArch otherwise
+reserves Escape and several function keys for its menu, save-state, screenshot,
+and other frontend commands. The default Game Focus toggle is usually **Scroll
+Lock** and can be changed in RetroArch's input settings. A startup message
+reminds keyboard users to enable it.
+
+Physical keyboard and RetroPad input can be used simultaneously. Quick Menu >
+Controls remaps the RetroPad; it does not change the physical keyboard mapping.
+
 ## RetroPad Button Mapping
 
 | RetroPad Button | WQX Key | Action |
