@@ -132,6 +132,13 @@ fn minifb_host_key(key: Key) -> Option<HostKey> {
         Key::Right => HostKey::Right,
         Key::PageUp => HostKey::PageUp,
         Key::PageDown => HostKey::PageDown,
+        Key::Period => HostKey::Period,
+        Key::Comma => HostKey::Comma,
+        Key::Slash => HostKey::Slash,
+        Key::LeftBracket => HostKey::LeftBracket,
+        Key::RightBracket => HostKey::RightBracket,
+        Key::Backslash => HostKey::Backslash,
+        Key::Equal => HostKey::Equals,
         _ => return None,
     };
     Some(host_key)
@@ -330,7 +337,7 @@ fn main() -> Result<()> {
     let mut input_state = FrontendInputState::default();
     let mut mouse_input: Option<SkinInput> = None;
 
-    while window.is_open() && !window.is_key_down(Key::Escape) {
+    while window.is_open() {
         // Process input
         window
             .get_keys_pressed(minifb::KeyRepeat::No)
@@ -540,5 +547,9 @@ mod tests {
         assert_eq!(map_key(MachineModel::Nc1020, Key::A), Some(0x28));
         assert_eq!(map_key(MachineModel::Nc1020, Key::Space), Some(0x3E));
         assert_eq!(map_key(MachineModel::Nc1020, Key::Key1), Some(0x34));
+        assert_eq!(map_key(MachineModel::Nc1020, Key::LeftBracket), Some(0x38));
+        assert_eq!(map_key(MachineModel::Nc1020, Key::RightBracket), Some(0x39));
+        assert_eq!(map_key(MachineModel::Nc1020, Key::Backslash), Some(0x3a));
+        assert_eq!(map_key(MachineModel::Nc1020, Key::Period), Some(0x3d));
     }
 }

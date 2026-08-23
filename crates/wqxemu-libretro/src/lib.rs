@@ -73,6 +73,13 @@ const RETRO_DEVICE_ID_JOYPAD_R: u32 = 11;
 const RETROK_RETURN: u32 = 13;
 const RETROK_ESCAPE: u32 = 27;
 const RETROK_SPACE: u32 = 32;
+const RETROK_COMMA: u32 = 44;
+const RETROK_PERIOD: u32 = 46;
+const RETROK_SLASH: u32 = 47;
+const RETROK_EQUALS: u32 = 61;
+const RETROK_LEFTBRACKET: u32 = 91;
+const RETROK_BACKSLASH: u32 = 92;
+const RETROK_RIGHTBRACKET: u32 = 93;
 const RETROK_LEFT: u32 = 0x250;
 const RETROK_UP: u32 = 0x251;
 const RETROK_RIGHT: u32 = 0x252;
@@ -386,6 +393,13 @@ fn retro_host_key(keycode: u32) -> Option<HostKey> {
         RETROK_RIGHT => HostKey::Right,
         RETROK_PAGEUP => HostKey::PageUp,
         RETROK_PAGEDOWN => HostKey::PageDown,
+        RETROK_PERIOD => HostKey::Period,
+        RETROK_COMMA => HostKey::Comma,
+        RETROK_SLASH => HostKey::Slash,
+        RETROK_LEFTBRACKET => HostKey::LeftBracket,
+        RETROK_RIGHTBRACKET => HostKey::RightBracket,
+        RETROK_BACKSLASH => HostKey::Backslash,
+        RETROK_EQUALS => HostKey::Equals,
         key if (RETROK_F1..=RETROK_F12).contains(&key) => {
             HostKey::Function((key - RETROK_F1 + 1) as u8)
         }
@@ -1082,6 +1096,22 @@ mod tests {
         assert_eq!(
             map_keyboard_key(MachineModel::Nc1020, RETROK_DELETE),
             Some(0x0f)
+        );
+        assert_eq!(
+            map_keyboard_key(MachineModel::Nc2000, RETROK_LEFTBRACKET),
+            Some(0x07)
+        );
+        assert_eq!(
+            map_keyboard_key(MachineModel::Nc2000, RETROK_RIGHTBRACKET),
+            Some(0x0f)
+        );
+        assert_eq!(
+            map_keyboard_key(MachineModel::Nc2000, RETROK_BACKSLASH),
+            Some(0x17)
+        );
+        assert_eq!(
+            map_keyboard_key(MachineModel::Nc2000, RETROK_PERIOD),
+            Some(0x2f)
         );
     }
 

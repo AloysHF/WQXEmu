@@ -32,6 +32,13 @@ pub enum HostKey {
     Right,
     PageUp,
     PageDown,
+    Period,
+    Comma,
+    Slash,
+    LeftBracket,
+    RightBracket,
+    Backslash,
+    Equals,
 }
 
 /// Combined frontend input state for keyboard, controller, and pointer input.
@@ -167,6 +174,7 @@ pub fn key_id_for_host_key(model: MachineModel, host_key: HostKey) -> Option<u8>
         HostKey::Return => Some("ENT"),
         HostKey::Escape => Some("ESC"),
         HostKey::Space => Some("SPC"),
+        HostKey::Equals => Some("SPC"),
         HostKey::Backspace => Some("F2"),
         HostKey::Delete | HostKey::Function(12) if model == MachineModel::Nc1020 => Some("DEL"),
         HostKey::Delete => Some("F12"),
@@ -174,8 +182,12 @@ pub fn key_id_for_host_key(model: MachineModel, host_key: HostKey) -> Option<u8>
         HostKey::Down => Some("DN"),
         HostKey::Left => Some("LT"),
         HostKey::Right => Some("RT"),
-        HostKey::PageUp => Some("PGUP"),
-        HostKey::PageDown => Some("PGDN"),
+        HostKey::PageUp | HostKey::Comma => Some("PGUP"),
+        HostKey::PageDown | HostKey::Slash => Some("PGDN"),
+        HostKey::Period => Some("."),
+        HostKey::LeftBracket => Some("HELP"),
+        HostKey::RightBracket => Some("SHIFT"),
+        HostKey::Backslash => Some("IME"),
         HostKey::Letter(_) | HostKey::Digit(_) | HostKey::Function(_) => None,
     };
 
@@ -1624,6 +1636,44 @@ mod tests {
             assert_eq!(
                 key_id_for_host_key(model, HostKey::Function(12)),
                 key_id_for_host_key(model, HostKey::Delete)
+            );
+        }
+    }
+
+    #[test]
+    fn shared_host_keys_cover_visible_special_keys() {
+        for model in [
+            MachineModel::Nc1020,
+            MachineModel::Pc1000,
+            MachineModel::Cc800,
+            MachineModel::Nc2000,
+            MachineModel::Nc3000,
+        ] {
+            for host_key in [
+                HostKey::LeftBracket,
+                HostKey::RightBracket,
+                HostKey::Backslash,
+                HostKey::Period,
+                HostKey::Comma,
+                HostKey::Slash,
+                HostKey::Equals,
+            ] {
+                assert!(
+                    key_id_for_host_key(model, host_key).is_some(),
+                    "{host_key:?} is missing for {model:?}"
+                );
+            }
+            assert_eq!(
+                key_id_for_host_key(model, HostKey::Comma),
+                key_id_for_host_key(model, HostKey::PageUp)
+            );
+            assert_eq!(
+                key_id_for_host_key(model, HostKey::Slash),
+                key_id_for_host_key(model, HostKey::PageDown)
+            );
+            assert_eq!(
+                key_id_for_host_key(model, HostKey::Equals),
+                key_id_for_host_key(model, HostKey::Space)
             );
         }
     }
