@@ -1050,7 +1050,10 @@ mod tests {
     /// Build RomFiles from the repository-root tmp/roms/ directory, or None if
     /// the dumps are not present (tests then skip).
     fn cc800_rom_files() -> Option<RomFiles> {
-        let base = std::path::Path::new(r"E:\Code\WQXEmu\tmp\roms\cc800");
+        let base = std::env::var("WQX_ROM_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::PathBuf::from("tmp/roms"))
+            .join("cc800");
         let rom = base.join("obj.bin");
         let nor = base.join("cc800.fls");
         if rom.exists() && nor.exists() {

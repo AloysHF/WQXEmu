@@ -1533,7 +1533,10 @@ mod tests {
     /// Build RomFiles from the repository-root tmp/roms/ directory, or None if
     /// the dumps are not present (tests then skip).
     fn nc2000_rom_files() -> Option<RomFiles> {
-        let base = std::path::Path::new(r"E:\Code\WQXEmu\tmp\roms\nc2000");
+        let base = std::env::var("WQX_ROM_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::PathBuf::from("tmp/roms"))
+            .join("nc2000");
         let nor = base.join("nc2000.nor");
         let nand = base.join("nc2000.nand");
         let nand0 = base.join("nc2000.nand0");

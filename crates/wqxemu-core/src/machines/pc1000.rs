@@ -1047,7 +1047,10 @@ mod tests {
     /// Build RomFiles from the repository-root tmp/roms/ directory, or None if
     /// the dumps are not present (tests then skip).
     fn pc1000_rom_files() -> Option<RomFiles> {
-        let base = std::path::Path::new(r"E:\Code\WQXEmu\tmp\roms\pc1000");
+        let base = std::env::var("WQX_ROM_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::PathBuf::from("tmp/roms"))
+            .join("pc1000");
         let rom = base.join("pc1000.rom");
         let nor = base.join("pc1000.fls");
         if rom.exists() && nor.exists() {
