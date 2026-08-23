@@ -601,7 +601,7 @@ pub extern "C" fn retro_get_system_av_info(info: *mut RetroSystemAvInfo) {
 /// Set controller port device
 #[no_mangle]
 pub extern "C" fn retro_set_controller_port_device(_port: u32, _device: u32) {
-    // NC1020 only supports basic input
+    // WQXEmu uses the standard RetroPad on port 0.
 }
 
 /// Start the selected machine without content.
@@ -867,9 +867,48 @@ pub extern "C" fn retro_get_region() -> u32 {
 // ============================================================
 
 /// Set input descriptors for RetroArch
+fn joypad_descriptor(id: u32, description: &'static CStr) -> RetroInputDescriptor {
+    RetroInputDescriptor {
+        port: 0,
+        device: RETRO_DEVICE_JOYPAD,
+        index: 0,
+        id,
+        description: description.as_ptr(),
+    }
+}
+
+fn input_descriptors() -> [RetroInputDescriptor; 13] {
+    [
+        joypad_descriptor(RETRO_DEVICE_ID_JOYPAD_B, c"Escape / Back"),
+        joypad_descriptor(RETRO_DEVICE_ID_JOYPAD_Y, c"F4"),
+        joypad_descriptor(RETRO_DEVICE_ID_JOYPAD_SELECT, c"F11 / Model Hotkey"),
+        joypad_descriptor(RETRO_DEVICE_ID_JOYPAD_START, c"F10 / Model Hotkey"),
+        joypad_descriptor(RETRO_DEVICE_ID_JOYPAD_UP, c"Up"),
+        joypad_descriptor(RETRO_DEVICE_ID_JOYPAD_DOWN, c"Down"),
+        joypad_descriptor(RETRO_DEVICE_ID_JOYPAD_LEFT, c"Left"),
+        joypad_descriptor(RETRO_DEVICE_ID_JOYPAD_RIGHT, c"Right"),
+        joypad_descriptor(RETRO_DEVICE_ID_JOYPAD_A, c"Enter / Confirm"),
+        joypad_descriptor(RETRO_DEVICE_ID_JOYPAD_X, c"F1"),
+        joypad_descriptor(RETRO_DEVICE_ID_JOYPAD_L, c"Page Up"),
+        joypad_descriptor(RETRO_DEVICE_ID_JOYPAD_R, c"Page Down"),
+        RetroInputDescriptor {
+            port: 0,
+            device: 0,
+            index: 0,
+            id: 0,
+            description: ptr::null(),
+        },
+    ]
+}
+
 fn set_input_descriptors() {
-    // Input descriptors are optional but help RetroArch show proper labels
-    // We'll skip the full implementation for now
+    let descriptors = input_descriptors();
+    unsafe {
+        environment(
+            RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS,
+            descriptors.as_ptr() as *mut c_void,
+        );
+    }
 }
 
 /// Set core variables for RetroArch
@@ -1025,6 +1064,39 @@ mod tests {
             map_keyboard_key(MachineModel::Nc1020, RETROK_DELETE),
             Some(0x0f)
         );
+    }
+
+    #[test]
+    fn advertises_every_mapped_retropad_button() {
+        let descriptors = input_descriptors();
+        let expected = [
+            (RETRO_DEVICE_ID_JOYPAD_B, "Escape / Back"),
+            (RETRO_DEVICE_ID_JOYPAD_Y, "F4"),
+            (RETRO_DEVICE_ID_JOYPAD_SELECT, "F11 / Model Hotkey"),
+            (RETRO_DEVICE_ID_JOYPAD_START, "F10 / Model Hotkey"),
+            (RETRO_DEVICE_ID_JOYPAD_UP, "Up"),
+            (RETRO_DEVICE_ID_JOYPAD_DOWN, "Down"),
+            (RETRO_DEVICE_ID_JOYPAD_LEFT, "Left"),
+            (RETRO_DEVICE_ID_JOYPAD_RIGHT, "Right"),
+            (RETRO_DEVICE_ID_JOYPAD_A, "Enter / Confirm"),
+            (RETRO_DEVICE_ID_JOYPAD_X, "F1"),
+            (RETRO_DEVICE_ID_JOYPAD_L, "Page Up"),
+            (RETRO_DEVICE_ID_JOYPAD_R, "Page Down"),
+        ];
+
+        for (descriptor, (id, description)) in descriptors.iter().zip(expected) {
+            assert_eq!(descriptor.port, 0);
+            assert_eq!(descriptor.device, RETRO_DEVICE_JOYPAD);
+            assert_eq!(descriptor.index, 0);
+            assert_eq!(descriptor.id, id);
+            assert_eq!(
+                unsafe { CStr::from_ptr(descriptor.description) }
+                    .to_str()
+                    .unwrap(),
+                description
+            );
+        }
+        assert!(descriptors.last().unwrap().description.is_null());
     }
 
     #[test]
