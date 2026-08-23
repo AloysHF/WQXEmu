@@ -19,8 +19,10 @@ use std::panic;
 use std::path::{Path, PathBuf};
 use std::ptr;
 
+#[cfg(test)]
+use wqxemu_core::key_id_for_host_key;
 use wqxemu_core::save::{read_persistent_state_file, write_persistent_state_file};
-use wqxemu_core::{key_id_for_host_key, Emulator, HostKey, MachineModel, LCD_HEIGHT, LCD_WIDTH};
+use wqxemu_core::{Emulator, FrontendInputState, HostKey, MachineModel, LCD_HEIGHT, LCD_WIDTH};
 
 // ============================================================
 // libretro constants
@@ -181,6 +183,7 @@ static mut INPUT_STATE_CB: RetroInputStateT = None;
 static mut SYSTEM_DIR: Option<String> = None;
 static mut SAVE_DIR: Option<String> = None;
 static mut PERSISTENT_STATE_PATH: Option<PathBuf> = None;
+static mut FRONTEND_INPUT: Option<FrontendInputState> = None;
 
 // ============================================================
 // Helper functions
@@ -396,43 +399,34 @@ fn retro_host_key(keycode: u32) -> Option<HostKey> {
 }
 
 /// Map a RetroArch keyboard keycode to the active model's keypad matrix.
+#[cfg(test)]
 fn map_keyboard_key(model: MachineModel, keycode: u32) -> Option<u8> {
     key_id_for_host_key(model, retro_host_key(keycode)?)
 }
 
 /// Map a RetroPad button to the active model's keypad matrix.
-fn map_joypad_button(model: MachineModel, button: u32) -> Option<u8> {
-    let token = match button {
-        RETRO_DEVICE_ID_JOYPAD_UP => "UP",
-        RETRO_DEVICE_ID_JOYPAD_DOWN => "DN",
-        RETRO_DEVICE_ID_JOYPAD_LEFT => "LT",
-        RETRO_DEVICE_ID_JOYPAD_RIGHT => "RT",
-        RETRO_DEVICE_ID_JOYPAD_A => "ENT",
-        RETRO_DEVICE_ID_JOYPAD_B => "ESC",
-        RETRO_DEVICE_ID_JOYPAD_X => "F1",
-        RETRO_DEVICE_ID_JOYPAD_Y => "F4",
-        RETRO_DEVICE_ID_JOYPAD_L => "PGUP",
-        RETRO_DEVICE_ID_JOYPAD_R => "PGDN",
-        RETRO_DEVICE_ID_JOYPAD_START => "F10",
-        RETRO_DEVICE_ID_JOYPAD_SELECT => "F11",
+fn retropad_host_key(button: u32) -> Option<HostKey> {
+    let host_key = match button {
+        RETRO_DEVICE_ID_JOYPAD_UP => HostKey::Up,
+        RETRO_DEVICE_ID_JOYPAD_DOWN => HostKey::Down,
+        RETRO_DEVICE_ID_JOYPAD_LEFT => HostKey::Left,
+        RETRO_DEVICE_ID_JOYPAD_RIGHT => HostKey::Right,
+        RETRO_DEVICE_ID_JOYPAD_A => HostKey::Return,
+        RETRO_DEVICE_ID_JOYPAD_B => HostKey::Escape,
+        RETRO_DEVICE_ID_JOYPAD_X => HostKey::Function(1),
+        RETRO_DEVICE_ID_JOYPAD_Y => HostKey::Function(4),
+        RETRO_DEVICE_ID_JOYPAD_L => HostKey::PageUp,
+        RETRO_DEVICE_ID_JOYPAD_R => HostKey::PageDown,
+        RETRO_DEVICE_ID_JOYPAD_START => HostKey::Function(10),
+        RETRO_DEVICE_ID_JOYPAD_SELECT => HostKey::Function(11),
         _ => return None,
     };
+    Some(host_key)
+}
 
-    let host_key = match token {
-        "UP" => HostKey::Up,
-        "DN" => HostKey::Down,
-        "LT" => HostKey::Left,
-        "RT" => HostKey::Right,
-        "ENT" => HostKey::Return,
-        "ESC" => HostKey::Escape,
-        "F1" => HostKey::Function(1),
-        "F4" => HostKey::Function(4),
-        "PGUP" => HostKey::PageUp,
-        "PGDN" => HostKey::PageDown,
-        "F10" => HostKey::Function(10),
-        "F11" => HostKey::Function(11),
-        _ => return None,
-    };
+#[cfg(test)]
+fn map_joypad_button(model: MachineModel, button: u32) -> Option<u8> {
+    let host_key = retropad_host_key(button)?;
     key_id_for_host_key(model, host_key)
 }
 
@@ -442,10 +436,8 @@ unsafe extern "C" fn keyboard_event(
     _character: u32,
     _key_modifiers: u16,
 ) {
-    if let Some(emulator) = EMULATOR.as_mut() {
-        if let Some(key_id) = map_keyboard_key(emulator.model(), keycode) {
-            emulator.set_key(key_id, down);
-        }
+    if let (Some(input), Some(host_key)) = (FRONTEND_INPUT.as_mut(), retro_host_key(keycode)) {
+        input.set_keyboard_key(host_key, down);
     }
 }
 
@@ -535,6 +527,7 @@ pub extern "C" fn retro_init() {
         SYSTEM_DIR = None;
         SAVE_DIR = None;
         PERSISTENT_STATE_PATH = None;
+        FRONTEND_INPUT = None;
         let mut sys_dir: *const c_char = ptr::null();
         if environment(
             RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY,
@@ -562,6 +555,7 @@ pub extern "C" fn retro_deinit() {
     unsafe {
         persist_active_emulator();
         EMULATOR = None;
+        FRONTEND_INPUT = None;
         SYSTEM_DIR = None;
         SAVE_DIR = None;
         PERSISTENT_STATE_PATH = None;
@@ -680,8 +674,11 @@ pub extern "C" fn retro_load_game(info: *const RetroGameInfo) -> bool {
                 )),
             }
         }
+        let mut frontend_input = FrontendInputState::default();
+        frontend_input.release_all(|key_id, down| emu.set_key(key_id, down));
         PERSISTENT_STATE_PATH = persistent_path;
         EMULATOR = Some(emu);
+        FRONTEND_INPUT = Some(frontend_input);
 
         log::info!(
             "Started {} from the RetroArch system directory",
@@ -697,6 +694,7 @@ pub extern "C" fn retro_unload_game() {
     unsafe {
         persist_active_emulator();
         EMULATOR = None;
+        FRONTEND_INPUT = None;
         PERSISTENT_STATE_PATH = None;
     }
 }
@@ -732,15 +730,18 @@ pub extern "C" fn retro_run() {
             poll();
         }
 
-        // Process joypad input
-        if let (Some(get_state), Some(emu)) = (INPUT_STATE_CB, EMULATOR.as_mut()) {
-            // Check all joypad buttons
+        // Process RetroPad input.
+        if let (Some(get_state), Some(input)) = (INPUT_STATE_CB, FRONTEND_INPUT.as_mut()) {
             for button in 0..12 {
                 let state = get_state(0, RETRO_DEVICE_JOYPAD, 0, button);
-                if let Some(key_id) = map_joypad_button(emu.model(), button) {
-                    emu.set_key(key_id, state != 0);
+                if let Some(host_key) = retropad_host_key(button) {
+                    input.set_controller_key(host_key, state != 0);
                 }
             }
+        }
+
+        if let (Some(input), Some(emu)) = (FRONTEND_INPUT.as_mut(), EMULATOR.as_mut()) {
+            input.sync(emu.model(), |key_id, down| emu.set_key(key_id, down));
         }
 
         // Run one frame
@@ -833,6 +834,9 @@ pub extern "C" fn retro_unserialize(data: *const c_void, size: usize) -> bool {
             log::error!("Failed to load state: {}", e);
             return false;
         }
+        if let Some(input) = FRONTEND_INPUT.as_mut() {
+            input.release_all(|key_id, down| emu.set_key(key_id, down));
+        }
 
         true
     }
@@ -864,6 +868,9 @@ pub extern "C" fn retro_reset() {
     unsafe {
         if let Some(ref mut emu) = EMULATOR {
             emu.reset();
+        }
+        if let Some(ref mut input) = FRONTEND_INPUT {
+            input.reset_applied();
         }
     }
 }

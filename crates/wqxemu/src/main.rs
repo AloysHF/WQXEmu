@@ -10,9 +10,11 @@ use minifb::{Key, Window, WindowOptions};
 
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
+use wqxemu_core::key_id_for_host_key;
 use wqxemu_core::save::{read_persistent_state_file, write_persistent_state_file};
 use wqxemu_core::{
-    detect_model, key_id_for_host_key, layout_for, Emulator, HostKey, MachineModel, RomFiles,
+    detect_model, layout_for, Emulator, FrontendInputState, HostKey, MachineModel, RomFiles,
     LCD_HEIGHT, LCD_WIDTH,
 };
 
@@ -135,6 +137,7 @@ fn minifb_host_key(key: Key) -> Option<HostKey> {
     Some(host_key)
 }
 
+#[cfg(test)]
 fn map_key(model: MachineModel, key: Key) -> Option<u8> {
     key_id_for_host_key(model, minifb_host_key(key)?)
 }
@@ -324,7 +327,7 @@ fn main() -> Result<()> {
 
     // Main event loop
     let layout = layout_for(model);
-    let mut pressed = [false; 64];
+    let mut input_state = FrontendInputState::default();
     let mut mouse_input: Option<SkinInput> = None;
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
@@ -333,18 +336,14 @@ fn main() -> Result<()> {
             .get_keys_pressed(minifb::KeyRepeat::No)
             .iter()
             .for_each(|key| {
-                if let Some(key_id) = map_key(model, *key) {
-                    if !pressed[key_id as usize] {
-                        emu.set_key(key_id, true);
-                        pressed[key_id as usize] = true;
-                    }
+                if let Some(host_key) = minifb_host_key(*key) {
+                    input_state.set_keyboard_key(host_key, true);
                 }
             });
 
         window.get_keys_released().iter().for_each(|key| {
-            if let Some(key_id) = map_key(model, *key) {
-                emu.set_key(key_id, false);
-                pressed[key_id as usize] = false;
+            if let Some(host_key) = minifb_host_key(*key) {
+                input_state.set_keyboard_key(host_key, false);
             }
         });
 
@@ -355,33 +354,22 @@ fn main() -> Result<()> {
             .and_then(|mouse| {
                 window_to_skin_pos(mouse, window.get_size(), (window_width, window_height))
             });
-        if mouse_down {
-            let next_input = mouse_pos.and_then(|(x, y)| skin.hit_test(x, y, layout));
-            if mouse_input != next_input {
-                if let Some(SkinInput::Key(old)) = mouse_input {
-                    emu.set_key(old, false);
-                    pressed[old as usize] = false;
-                }
-                match next_input {
-                    Some(SkinInput::Key(key_id)) => {
-                        emu.set_key(key_id, true);
-                        pressed[key_id as usize] = true;
-                    }
-                    Some(SkinInput::Reset) => {
-                        emu.reset();
-                        pressed.fill(false);
-                    }
-                    None => {}
-                }
-                mouse_input = next_input;
+        let next_input = mouse_down
+            .then(|| mouse_pos.and_then(|(x, y)| skin.hit_test(x, y, layout)))
+            .flatten();
+        if mouse_input != next_input {
+            if next_input == Some(SkinInput::Reset) {
+                emu.reset();
+                input_state.reset_applied();
             }
-        } else {
-            if let Some(SkinInput::Key(old)) = mouse_input {
-                emu.set_key(old, false);
-                pressed[old as usize] = false;
-            }
-            mouse_input = None;
+            mouse_input = next_input;
         }
+        if let Some(SkinInput::Key(key_id)) = mouse_input {
+            input_state.set_pointer_key(Some(key_id));
+        } else {
+            input_state.set_pointer_key(None);
+        }
+        input_state.sync(model, |key_id, down| emu.set_key(key_id, down));
 
         // Run one frame
         emu.run_frame();
@@ -389,7 +377,7 @@ fn main() -> Result<()> {
         // Get framebuffer and render
         let pixels = emu.framebuffer();
 
-        let buffer = skin.render(&pixels, layout, &pressed);
+        let buffer = skin.render(&pixels, layout, input_state.pressed());
 
         window
             .update_with_buffer(&buffer, window_width, window_height)

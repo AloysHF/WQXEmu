@@ -7,6 +7,9 @@
 // key hint) for each supported model so the desktop frontend can draw a
 // virtual keypad and accept mouse clicks.
 
+use std::collections::HashSet;
+
+use crate::input::KEY_COUNT;
 use crate::machine::MachineModel;
 
 /// A frontend-independent physical keyboard key.
@@ -29,6 +32,93 @@ pub enum HostKey {
     Right,
     PageUp,
     PageDown,
+}
+
+/// Combined frontend input state for keyboard, controller, and pointer input.
+#[derive(Clone, Debug)]
+pub struct FrontendInputState {
+    keyboard: HashSet<HostKey>,
+    controller: HashSet<HostKey>,
+    pointer: Option<u8>,
+    applied: [bool; KEY_COUNT],
+}
+
+impl Default for FrontendInputState {
+    fn default() -> Self {
+        Self {
+            keyboard: HashSet::new(),
+            controller: HashSet::new(),
+            pointer: None,
+            applied: [false; KEY_COUNT],
+        }
+    }
+}
+
+impl FrontendInputState {
+    pub fn set_keyboard_key(&mut self, key: HostKey, pressed: bool) {
+        if pressed {
+            self.keyboard.insert(key);
+        } else {
+            self.keyboard.remove(&key);
+        }
+    }
+
+    pub fn set_controller_key(&mut self, key: HostKey, pressed: bool) {
+        if pressed {
+            self.controller.insert(key);
+        } else {
+            self.controller.remove(&key);
+        }
+    }
+
+    pub fn set_pointer_key(&mut self, key_id: Option<u8>) {
+        self.pointer = key_id.filter(|key_id| (*key_id as usize) < KEY_COUNT);
+    }
+
+    /// Forget the previously applied matrix after the emulated machine resets.
+    pub fn reset_applied(&mut self) {
+        self.applied.fill(false);
+    }
+
+    /// Release every emulated key after loading state that may contain input.
+    pub fn release_all(&mut self, mut set_key: impl FnMut(u8, bool)) {
+        for key_id in 0..KEY_COUNT {
+            set_key(key_id as u8, false);
+        }
+        self.reset_applied();
+    }
+
+    /// Release all frontend inputs and forget the applied matrix.
+    pub fn clear(&mut self) {
+        self.keyboard.clear();
+        self.controller.clear();
+        self.pointer = None;
+        self.reset_applied();
+    }
+
+    pub fn pressed(&self) -> &[bool; KEY_COUNT] {
+        &self.applied
+    }
+
+    /// Merge every input source and emit only keypad matrix changes.
+    pub fn sync(&mut self, model: MachineModel, mut set_key: impl FnMut(u8, bool)) {
+        let mut desired = [false; KEY_COUNT];
+        for host_key in self.keyboard.iter().chain(&self.controller) {
+            if let Some(key_id) = key_id_for_host_key(model, *host_key) {
+                desired[key_id as usize] = true;
+            }
+        }
+        if let Some(key_id) = self.pointer {
+            desired[key_id as usize] = true;
+        }
+
+        for (key_id, (&next, &current)) in desired.iter().zip(&self.applied).enumerate() {
+            if next != current {
+                set_key(key_id as u8, next);
+            }
+        }
+        self.applied = desired;
+    }
 }
 
 /// A single on-screen key.
@@ -1536,5 +1626,45 @@ mod tests {
                 key_id_for_host_key(model, HostKey::Delete)
             );
         }
+    }
+
+    #[test]
+    fn frontend_input_keeps_same_source_aliases_pressed() {
+        let mut input = FrontendInputState::default();
+        let mut events = Vec::new();
+
+        input.set_keyboard_key(HostKey::Letter('B'), true);
+        input.sync(MachineModel::Nc2000, |key, down| events.push((key, down)));
+        input.set_keyboard_key(HostKey::Digit(1), true);
+        input.sync(MachineModel::Nc2000, |key, down| events.push((key, down)));
+        input.set_keyboard_key(HostKey::Letter('B'), false);
+        input.sync(MachineModel::Nc2000, |key, down| events.push((key, down)));
+
+        assert_eq!(events, vec![(0x26, true)]);
+
+        input.set_keyboard_key(HostKey::Digit(1), false);
+        input.sync(MachineModel::Nc2000, |key, down| events.push((key, down)));
+        assert_eq!(events, vec![(0x26, true), (0x26, false)]);
+    }
+
+    #[test]
+    fn frontend_input_merges_keyboard_controller_and_pointer() {
+        let mut input = FrontendInputState::default();
+        let mut events = Vec::new();
+
+        input.set_keyboard_key(HostKey::Up, true);
+        input.set_controller_key(HostKey::Up, true);
+        input.sync(MachineModel::Nc2000, |key, down| events.push((key, down)));
+        input.set_keyboard_key(HostKey::Up, false);
+        input.sync(MachineModel::Nc2000, |key, down| events.push((key, down)));
+        input.set_pointer_key(Some(0x13));
+        input.set_controller_key(HostKey::Up, false);
+        input.sync(MachineModel::Nc2000, |key, down| events.push((key, down)));
+
+        assert_eq!(events, vec![(0x13, true)]);
+
+        input.set_pointer_key(None);
+        input.sync(MachineModel::Nc2000, |key, down| events.push((key, down)));
+        assert_eq!(events, vec![(0x13, true), (0x13, false)]);
     }
 }
