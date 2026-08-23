@@ -39,7 +39,7 @@ A Wenquxing (文曲星) electronic dictionary emulator written in Rust, using Lo
 Download the latest binary from the [Releases](https://github.com/AloysHF/WQXEmu/releases) page and run:
 
 ```bash
-wqx-emu --model nc1020 --rom roms/nc1020/obj_lu.bin --nor roms/nc1020/nc1020.fls
+wqx-emu --model nc1020 --rom tmp/roms/nc1020/obj_lu.bin --nor tmp/roms/nc1020/nc1020.fls
 ```
 
 Firmware dumps are passed with options named after the storage device: `--rom`, `--nor`, `--nand`, and `--nand0`. The required combination depends on the selected model.
@@ -71,7 +71,7 @@ Requires [Rust](https://www.rust-lang.org/tools/install) (stable).
 
 ```bash
 cargo build --release
-cargo run --release -- --model nc1020 --rom roms/nc1020/obj_lu.bin --nor roms/nc1020/nc1020.fls
+cargo run --release -- --model nc1020 --rom tmp/roms/nc1020/obj_lu.bin --nor tmp/roms/nc1020/nc1020.fls
 ```
 
 The binary is produced at `target/release/wqx-emu` (or `wqx-emu.exe` on Windows).

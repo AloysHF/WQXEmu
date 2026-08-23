@@ -75,7 +75,7 @@ The compiled core will be at:
    ```
 3. Copy firmware files:
    ```bash
-   adb push roms/nc1020/ /sdcard/RetroArch/system/WQXEmu/nc1020/
+   adb push tmp/roms/nc1020/ /sdcard/RetroArch/system/WQXEmu/nc1020/
    ```
 
 ## Supported Android Architectures

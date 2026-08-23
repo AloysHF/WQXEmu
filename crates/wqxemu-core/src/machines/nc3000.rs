@@ -1619,10 +1619,10 @@ mod tests {
         assert_eq!(machine.lcd.framebuffer_raw()[0], 0x55);
     }
 
-    /// Build RomFiles from the repository-root roms/ directory, or None if
+    /// Build RomFiles from the repository-root tmp/roms/ directory, or None if
     /// the dumps are not present (tests then skip).
     fn nc3000_rom_files() -> Option<RomFiles> {
-        let base = std::path::Path::new(r"E:\Code\WQXEmu\roms\nc3000");
+        let base = std::path::Path::new(r"E:\Code\WQXEmu\tmp\roms\nc3000");
         let nor = base.join("nc3000.nor");
         let nand = base.join("nc3000.nand");
         if nor.exists() && nand.exists() {
