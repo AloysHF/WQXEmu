@@ -157,9 +157,8 @@ Contributions are welcome! Whether you're interested in fixing bugs, adding feat
 
 ## Acknowledgments
 
-- [wangyu-/NC2000](https://github.com/wangyu-/NC2000) — NC2000/NC2600/NC1020 emulator
-- [Wang-Yue/NC1020](https://github.com/Wang-Yue/NC1020) — NC1020 emulator
-- [banxian/Sim800](https://github.com/banxian/Sim800) — CC800/PC1000 emulator
+- [wangyu-/NC2000](https://github.com/wangyu-/NC2000)
+- [banxian/Sim800](https://github.com/banxian/Sim800)
 
 ## License
 
