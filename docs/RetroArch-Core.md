@@ -63,7 +63,7 @@ The core automatically detects the model based on the loaded firmware files:
 
 ### Firmware File Placement
 
-Place firmware files in RetroArch's `system/` directory:
+Keep each model's firmware files together in its own directory. The directory can be anywhere RetroArch can access; placing it under RetroArch's `system/` directory is recommended:
 
 ```
 system/
@@ -86,6 +86,8 @@ system/
         └── nc3000.nand
 ```
 
+Load any one file from the model's directory. The core first looks for companion files with the same stem, then accepts a uniquely matching firmware extension in that directory. This supports both pairs such as `pc1000.rom` + `pc1000.fls` and differently named pairs such as `obj_lu.bin` + `nc1020.fls`.
+
 ## RetroPad Button Mapping
 
 | RetroPad Button | WQX Key | Action |
@@ -96,107 +98,18 @@ system/
 | D-Pad Right | Right | Navigate right |
 | A | Enter | Confirm |
 | B | Escape | Back / Cancel |
-| X | — | — |
-| Y | — | — |
-| L1 | — | — |
-| R1 | — | — |
+| X | F1 | Function key 1 |
+| Y | F4 | Function key 4 |
+| L1 | Page Up | Previous page |
+| R1 | Page Down | Next page |
 | L2 | — | — |
 | R2 | — | — |
-| Select | — | — |
-| Start | — | — |
+| Select | F11 | Model-specific hotkey |
+| Start | F10 | Model-specific hotkey |
 
 ## Core Options
 
-Core options can be configured from RetroArch's **Quick Menu → Core Options**.
-
-### Display Options
-
-#### LCD Scale
-
-- **Description**: Scale factor for the LCD display
-- **Values**: 1x, 2x, 3x, 4x (default)
-- **Effect**: Changes the size of the LCD display
-
-#### Show Grid Lines
-
-- **Description**: Show grid lines on the LCD
-- **Values**: Off, On (default)
-- **Effect**: Shows or hides grid lines on the LCD
-
-#### Ghosting Effect
-
-- **Description**: Enable/disable LCD ghosting effect
-- **Values**: Off, On (default)
-- **Effect**: Enables or disables the LCD ghosting effect
-
-### Audio Options
-
-#### Audio Volume
-
-- **Description**: Master audio volume
-- **Values**: 0-100 (default: 100)
-- **Effect**: Adjusts the overall audio volume
-
-#### Audio Sample Rate
-
-- **Description**: Audio sample rate
-- **Values**: 22050, 44100, 48000 (default)
-- **Effect**: Changes the audio sample rate
-
-### Input Options
-
-#### Key Repeat Delay
-
-- **Description**: Delay before key repeat starts
-- **Values**: 100-1000 ms (default: 500)
-- **Effect**: Adjusts the delay before key repeat starts
-
-#### Key Repeat Interval
-
-- **Description**: Interval between key repeats
-- **Values**: 50-500 ms (default: 100)
-- **Effect**: Adjusts the interval between key repeats
-
-### Emulation Options
-
-#### CPU Speed
-
-- **Description**: CPU speed multiplier
-- **Values**: 0.5x, 1x (default), 2x, 4x
-- **Effect**: Adjusts the CPU speed
-
-#### Timer Speed
-
-- **Description**: Timer speed multiplier
-- **Values**: 0.5x, 1x (default), 2x, 4x
-- **Effect**: Adjusts the timer speed
-
-### Debug Options
-
-#### CPU Trace
-
-- **Description**: Enable CPU instruction tracing
-- **Values**: Off (default), On
-- **Effect**: Shows each CPU instruction executed in the log
-
-#### IO Trace
-
-- **Description**: Enable IO register tracing
-- **Values**: Off (default), On
-- **Effect**: Shows IO register reads and writes in the log
-
-#### Bank Trace
-
-- **Description**: Enable bank switching tracing
-- **Values**: Off (default), On
-- **Effect**: Shows bank switch operations in the log
-
-### Notes
-
-1. **Changes require restart** — Most core options require restarting the core to take effect
-2. **Performance impact** — Some options may affect performance
-3. **Debug options are verbose** — Use with caution in production
-4. **Default values are recommended** — Change only if you know what you're doing
+The current core does not expose core-specific options. Display scaling, audio volume, input bindings, and logging use RetroArch's frontend settings.
 
 ## Save States
 
@@ -212,9 +125,10 @@ Save states are supported through RetroArch's save state system.
 
 ### Important Notes
 
-- Save states are tied to the specific model and firmware version
-- Save states from different models are not compatible
+- The core rejects save states created for a different model
+- Use the same firmware set when loading a save state
 - Save states are separate from persistent sessions
+- Source firmware dumps remain read-only; flash changes are not persisted after unloading content
 
 ## Screenshots
 
@@ -222,30 +136,12 @@ Screenshots can be taken through RetroArch:
 
 - Press **F8** or use **Quick Menu → Take Screenshot**
 
-## Debug Features
-
-### CPU Tracing
-
-Enable CPU tracing through core options:
-
-1. Open **Quick Menu → Core Options**
-2. Enable **CPU Trace**
-3. Restart the core
-
-### IO Tracing
-
-Enable IO register tracing:
-
-1. Open **Quick Menu → Core Options**
-2. Enable **IO Trace**
-3. Restart the core
-
 ## Troubleshooting
 
 ### Common Issues
 
 1. **"No firmware found"** — Ensure firmware files are in the correct location
-2. **"Model detection failed"** — Manually select the model in core options
+2. **"Model detection failed"** — Keep only one model's firmware set in the selected file's directory and verify all required files are present
 3. **"Black screen"** — Check firmware file integrity
 
 ### Debug Logging

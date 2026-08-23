@@ -112,14 +112,14 @@ Place firmware files in RetroArch's system directory:
 
 ### Core Options
 
-Core options can be configured through RetroArch's **Quick Menu → Core Options**.
+The current core does not expose core-specific options. Use RetroArch's frontend settings for display, audio, and input configuration.
 
 ## Performance Tips
 
 1. **Use arm64-v8a** — Best performance for modern devices
 2. **Close background apps** — Free up memory and CPU
 3. **Use a gamepad** — Better control than touchscreen
-4. **Lower audio quality** — Reduce CPU usage if needed
+4. **Adjust frontend latency** — Use RetroArch's audio and video latency settings if needed
 
 ## Troubleshooting
 
@@ -128,7 +128,7 @@ Core options can be configured through RetroArch's **Quick Menu → Core Options
 1. **"Core failed to load"** — Ensure the core file is in the correct location
 2. **"No firmware found"** — Check firmware file paths and permissions
 3. **"Black screen"** — Try a different firmware version
-4. **"Audio crackling"** — Lower audio quality in core options
+4. **"Audio crackling"** — Adjust RetroArch's frontend audio latency settings
 
 ### Debug Logging
 
@@ -143,8 +143,8 @@ Enable debug logging in RetroArch:
 If you experience performance issues:
 
 1. Check CPU usage in RetroArch's **Quick Menu → Information**
-2. Try lowering the audio sample rate
-3. Disable unnecessary core options
+2. Try increasing RetroArch's audio latency
+3. Disable unnecessary frontend video filters and shaders
 4. Close other apps running in the background
 
 ## Building with Android Studio
