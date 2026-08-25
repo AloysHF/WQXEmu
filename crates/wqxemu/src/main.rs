@@ -425,6 +425,7 @@ fn save_screenshot(pixels: &[u32], path: &str) -> Result<()> {
 mod tests {
     use super::{
         map_key, validate_firmware_files, validate_state_file_path, window_to_skin_pos, Args,
+        SkinMode,
     };
     use clap::Parser;
     use minifb::Key;
@@ -508,6 +509,16 @@ mod tests {
 
         let enabled_args = Args::try_parse_from(["wqxemu", "--state-file", "device.wqxs"]).unwrap();
         assert_eq!(enabled_args.state_file, Some(PathBuf::from("device.wqxs")));
+    }
+
+    #[test]
+    fn skin_mode_defaults_to_image_and_accepts_code() {
+        let default_args = Args::try_parse_from(["wqxemu"]).unwrap();
+        assert_eq!(default_args.skin, SkinMode::Image);
+
+        let code_args = Args::try_parse_from(["wqxemu", "--skin", "code"]).unwrap();
+        assert_eq!(code_args.skin, SkinMode::Code);
+        assert!(Args::try_parse_from(["wqxemu", "--skin", "unknown"]).is_err());
     }
 
     #[test]

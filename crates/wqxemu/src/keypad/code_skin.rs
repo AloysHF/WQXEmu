@@ -133,11 +133,11 @@ fn draw_special_controls(canvas: &mut Canvas, model: MachineModel, palette: Pale
     match model {
         MachineModel::Nc1020 => {
             draw_button(canvas, Rect::centered(105, 950, 82, 52), 0xEF8A24, 0x1B1B1B);
-            canvas.text_centered("VOICE", 105, 950, 5, 0x1B1B1B);
+            canvas.text_centered("VOICE", 105, 950, 2, 0x1B1B1B);
             draw_button(canvas, Rect::centered(203, 950, 82, 52), 0xEF8A24, 0x1B1B1B);
-            canvas.text_centered("TIME", 203, 950, 5, 0x1B1B1B);
+            canvas.text_centered("TIME", 203, 950, 3, 0x1B1B1B);
             canvas.circle(295, 970, 13, 0x1B5EA8);
-            canvas.text_centered("RESET", 295, 938, 4, palette.key_text);
+            canvas.text_centered("RESET", 295, 938, 2, palette.key_text);
         }
         MachineModel::Nc2000 => {
             canvas.circle(305, 962, 13, 0x365A97);
@@ -211,9 +211,16 @@ fn draw_button(canvas: &mut Canvas, region: Rect, face: u32, _text: u32) {
 
 fn draw_branding(canvas: &mut Canvas, model: MachineModel, palette: Palette) {
     let model_name = model.name().to_ascii_uppercase();
-    canvas.text_centered("WENQUXING", 543, 620, 8, palette.trim);
-    canvas.text_centered(&model_name, 543, 654, 8, palette.accent);
-    canvas.text_centered("ELECTRONIC DICTIONARY", 790, 770, 5, palette.trim);
+    let (brand_x, model_x, y) = match model {
+        MachineModel::Cc800 => (730, 875, 570),
+        MachineModel::Nc3000 => (265, 420, 78),
+        MachineModel::Pc1000 => (250, 425, 610),
+        MachineModel::Nc1020 => (245, 465, 610),
+        MachineModel::Nc2000 => (345, 690, 625),
+    };
+    canvas.text_centered("WENQUXING", brand_x, y, 5, palette.trim);
+    canvas.text_centered(&model_name, model_x, y, 5, palette.accent);
+    canvas.text_centered("ELECTRONIC DICTIONARY", 810, 770, 3, palette.trim);
 }
 
 fn draw_latch(canvas: &mut Canvas, palette: Palette) {

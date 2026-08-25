@@ -411,7 +411,7 @@ mod tests {
     use wqxemu_core::layout_for;
 
     #[test]
-    fn all_skins_load_at_desktop_size() {
+    fn all_skin_modes_render_every_model_at_desktop_size() {
         for model in [
             MachineModel::Nc1020,
             MachineModel::Nc2000,
@@ -419,9 +419,13 @@ mod tests {
             MachineModel::Pc1000,
             MachineModel::Cc800,
         ] {
-            let skin = DeviceSkin::load(model, 4, SkinMode::Image).unwrap();
-            assert_eq!(skin.width(), 450);
-            assert_eq!(skin.height(), 600);
+            for mode in [SkinMode::Image, SkinMode::Code] {
+                let skin = DeviceSkin::load(model, 4, mode).unwrap();
+                assert_eq!(skin.width(), 450);
+                assert_eq!(skin.height(), 600);
+                assert_eq!(skin.pixels.len(), 450 * 600);
+                assert!(skin.pixels.iter().any(|pixel| *pixel != 0xF0F0F0));
+            }
         }
     }
 
@@ -459,16 +463,35 @@ mod tests {
     }
 
     #[test]
-    fn lcd_replaces_the_static_screen_image() {
-        let skin = DeviceSkin::load(MachineModel::Pc1000, 4, SkinMode::Image).unwrap();
+    fn lcd_replaces_the_static_screen_in_both_modes() {
         let lcd = vec![0xFFFF_FFFF; LCD_WIDTH * LCD_HEIGHT];
-        let output = skin.render(&lcd, layout_for(MachineModel::Pc1000), &[false; 64]);
-        let screen_x = skin.scale_x(skin.spec.screen.x + skin.spec.screen.width / 2);
-        let screen_y = skin.scale_y(skin.spec.screen.y + skin.spec.screen.height / 2);
-        assert_eq!(
-            output[screen_y * skin.width() + screen_x],
-            skin.spec.lcd_background
-        );
+        for mode in [SkinMode::Image, SkinMode::Code] {
+            let skin = DeviceSkin::load(MachineModel::Pc1000, 4, mode).unwrap();
+            let output = skin.render(&lcd, layout_for(MachineModel::Pc1000), &[false; 64]);
+            let screen_x = skin.scale_x(skin.spec.screen.x + skin.spec.screen.width / 2);
+            let screen_y = skin.scale_y(skin.spec.screen.y + skin.spec.screen.height / 2);
+            assert_eq!(
+                output[screen_y * skin.width() + screen_x],
+                skin.spec.lcd_background
+            );
+        }
+    }
+
+    #[test]
+    fn pressed_key_feedback_works_in_both_modes() {
+        let model = MachineModel::Nc3000;
+        let layout = layout_for(model);
+        let key = &layout[0];
+        let key_id = key_id_for(model, key.row, key.col);
+        for mode in [SkinMode::Image, SkinMode::Code] {
+            let skin = DeviceSkin::load(model, 2, mode).unwrap();
+            let lcd = vec![0xFFFF_FFFF; LCD_WIDTH * LCD_HEIGHT];
+            let normal = skin.render(&lcd, layout, &[false; 64]);
+            let mut pressed = [false; 64];
+            pressed[key_id as usize] = true;
+            let highlighted = skin.render(&lcd, layout, &pressed);
+            assert_ne!(normal, highlighted);
+        }
     }
 
     #[test]
