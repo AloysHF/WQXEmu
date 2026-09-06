@@ -25,7 +25,7 @@ A Wenquxing (文曲星) electronic dictionary emulator written in Rust, using Lo
 - **Multi-model architecture** — shared `Machine` trait with NC1020 / PC1000 / CC800 / NC2000 / NC3000 backends (PC1000 and CC800 boot to the main menu; NC2000/NC3000 boot to the clock screen with standby/wake)
 - **LCD display** — 160×80 pixel display with model-correct framebuffer placement, 4 grayscale levels, and ghosting effects
 - **Keyboard input** — complete QWERTY keyboard matrix emulation
-- **Device skins and virtual keypad** — the desktop frontend embeds the live LCD in a model-specific device image; the pictured keys can be clicked with the mouse or pressed on the PC keyboard, and pressed keys are highlighted
+- **Device skins and virtual keypad** — choose the original model-specific image or a fully code-drawn skin; both embed the live LCD and support clickable keys, PC keyboard input, and pressed-key highlighting
 - **Audio system** — SPDS104A DSP emulation with tone generation
 - **Timer system** — multiple timer sources with interrupt generation
 - **Persistent sessions** — optional compressed state files resume any supported model without modifying source dumps
@@ -41,6 +41,10 @@ Download the latest binary from the [Releases](https://github.com/AloysHF/WQXEmu
 ```bash
 wqx-emu --model nc1020 --rom tmp/roms/nc1020/obj_lu.bin --nor tmp/roms/nc1020/nc1020.fls
 ```
+
+The original image skin is used by default. Pass `--skin code` to render the
+device entirely with built-in drawing primitives while retaining the same LCD
+placement and clickable key geometry.
 
 Firmware dumps are passed with options named after the storage device: `--rom`, `--nor`, `--nand`, and `--nand0`. The required combination depends on the selected model.
 

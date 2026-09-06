@@ -81,7 +81,20 @@ wqx-emu [OPTIONS] [COMMAND]
 
 - `--scale <N>` — Window scale factor (default: 4)
   - Range: 1-8
+- `--skin <MODE>` — Device skin renderer (default: `image`)
+  - `image` uses the original embedded model image
+  - `code` draws the shell, controls, labels, speaker, and keyboard without reading a skin image
 - `--fullscreen` — Start in fullscreen mode
+
+For example, start the NC1020 with the code-drawn skin:
+
+```bash
+wqx-emu --model nc1020 --rom obj_lu.bin --nor nc1020.fls --skin code
+```
+
+Both modes use the same LCD rectangle and clickable key geometry. The image
+mode provides the original photographic appearance; the code mode recreates
+the device layout with model-specific colors and raster-drawn controls.
 
 ### State Management
 

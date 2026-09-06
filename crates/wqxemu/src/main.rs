@@ -19,7 +19,7 @@ use wqxemu_core::{
 };
 
 mod keypad;
-use keypad::{DeviceSkin, SkinInput};
+use keypad::{DeviceSkin, SkinInput, SkinMode};
 
 /// WQXEmu - Wenquxing Emulator
 #[derive(Parser)]
@@ -61,6 +61,10 @@ struct Args {
         help = "Device skin scale factor (4 = 600 pixels high)"
     )]
     scale: u32,
+
+    /// Device skin source: embedded image or code-drawn graphics
+    #[arg(long, value_enum, default_value_t = SkinMode::Image)]
+    skin: SkinMode,
 
     /// Take a screenshot after N frames and exit (saves as PNG)
     #[arg(short = 'S', long = "screenshot", value_name = "PATH")]
@@ -314,7 +318,7 @@ fn main() -> Result<()> {
     }
 
     // Create a normal resizable window whose client area is the device skin.
-    let skin = DeviceSkin::load(model, args.scale)?;
+    let skin = DeviceSkin::load(model, args.scale, args.skin)?;
     let window_width = skin.width();
     let window_height = skin.height();
 
@@ -421,6 +425,7 @@ fn save_screenshot(pixels: &[u32], path: &str) -> Result<()> {
 mod tests {
     use super::{
         map_key, validate_firmware_files, validate_state_file_path, window_to_skin_pos, Args,
+        SkinMode,
     };
     use clap::Parser;
     use minifb::Key;
@@ -504,6 +509,16 @@ mod tests {
 
         let enabled_args = Args::try_parse_from(["wqxemu", "--state-file", "device.wqxs"]).unwrap();
         assert_eq!(enabled_args.state_file, Some(PathBuf::from("device.wqxs")));
+    }
+
+    #[test]
+    fn skin_mode_defaults_to_image_and_accepts_code() {
+        let default_args = Args::try_parse_from(["wqxemu"]).unwrap();
+        assert_eq!(default_args.skin, SkinMode::Image);
+
+        let code_args = Args::try_parse_from(["wqxemu", "--skin", "code"]).unwrap();
+        assert_eq!(code_args.skin, SkinMode::Code);
+        assert!(Args::try_parse_from(["wqxemu", "--skin", "unknown"]).is_err());
     }
 
     #[test]
