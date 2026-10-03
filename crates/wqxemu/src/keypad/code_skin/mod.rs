@@ -1,37 +1,47 @@
+//! Code-drawn device skins for all supported models.
+//!
+//! Each model's shell drawing lives in its own module so changes to one
+//! device skin cannot affect another. Shared rendering infrastructure
+//! (Canvas, key drawing, text) stays here.
+
 use image::{imageops::FilterType, ImageBuffer, Rgb};
 use wqxemu_core::{KeyDef, MachineModel};
 
 use super::{key_region, Rect, SOURCE_HEIGHT, SOURCE_WIDTH};
 
-#[path = "font.rs"]
 mod font;
 
-const WINDOW_BACKGROUND: u32 = 0xF0F0F0;
+mod cc800;
+mod nc1020;
+mod nc2000;
+mod nc3000;
+mod pc1000;
 
-const WHITE: u32 = 0xFFFFFF;
-const BLACK: u32 = 0x000000;
+pub(super) const WINDOW_BACKGROUND: u32 = 0xF0F0F0;
+pub(super) const WHITE: u32 = 0xFFFFFF;
+pub(super) const BLACK: u32 = 0x000000;
 
-const SZ_SMALL: u8 = 10;
-const SZ_TAG: u8 = 12;
-const SZ_TEXT: u8 = 14;
-const SZ_KEY: u8 = 16;
-const SZ_INFO: u8 = 20;
-const SZ_NUM: u8 = 24;
-const SZ_LOGO: u8 = 28;
+pub(super) const SZ_SMALL: u8 = 10;
+pub(super) const SZ_TAG: u8 = 12;
+pub(super) const SZ_TEXT: u8 = 14;
+pub(super) const SZ_KEY: u8 = 16;
+pub(super) const SZ_INFO: u8 = 20;
+pub(super) const SZ_NUM: u8 = 24;
+pub(super) const SZ_LOGO: u8 = 28;
 
 #[derive(Clone, Copy)]
-enum ButtonShape {
+pub(super) enum ButtonShape {
     Rect(usize),
     Capsule,
     Circle,
 }
 
 #[derive(Clone, Copy)]
-struct ButtonStyle {
-    face: u32,
-    border: u32,
-    text: u32,
-    shape: ButtonShape,
+pub(super) struct ButtonStyle {
+    pub(super) face: u32,
+    pub(super) border: u32,
+    pub(super) text: u32,
+    pub(super) shape: ButtonShape,
 }
 
 pub(super) fn render(
@@ -48,629 +58,12 @@ pub(super) fn render(
 
 fn draw_device(canvas: &mut Canvas, model: MachineModel, screen: Rect, layout: &[KeyDef]) {
     match model {
-        MachineModel::Nc1020 => draw_nc1020(canvas, screen, layout),
-        MachineModel::Nc2000 => draw_nc2000(canvas, screen, layout),
-        MachineModel::Nc3000 => draw_nc3000(canvas, screen, layout),
-        MachineModel::Pc1000 => draw_pc1000(canvas, screen, layout),
-        MachineModel::Cc800 => draw_cc800(canvas, screen, layout),
+        MachineModel::Nc1020 => nc1020::draw(canvas, screen, layout),
+        MachineModel::Nc2000 => nc2000::draw(canvas, screen, layout),
+        MachineModel::Nc3000 => nc3000::draw(canvas, screen, layout),
+        MachineModel::Pc1000 => pc1000::draw(canvas, screen, layout),
+        MachineModel::Cc800 => cc800::draw(canvas, screen, layout),
     }
-}
-
-fn draw_nc1020(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
-    canvas.gradient_rounded_rect(
-        Rect {
-            x: 36,
-            y: 28,
-            width: 1014,
-            height: 1392,
-        },
-        36,
-        0x2566CE,
-        0x1A4FA8,
-    );
-    canvas.gradient_rounded_rect(
-        Rect {
-            x: 52,
-            y: 44,
-            width: 982,
-            height: 648,
-        },
-        26,
-        0xF7F7F5,
-        0xE9EAE8,
-    );
-    canvas.gradient_rounded_rect(
-        Rect {
-            x: 52,
-            y: 716,
-            width: 982,
-            height: 688,
-        },
-        30,
-        0xF5F5F3,
-        0xE4E5E3,
-    );
-
-    canvas.gradient_rounded_rect(
-        Rect {
-            x: 70,
-            y: 84,
-            width: 830,
-            height: 452,
-        },
-        18,
-        0xB4B4B4,
-        0xA2A2A2,
-    );
-    let bezel = Rect {
-        x: screen.x - 14,
-        y: screen.y - 14,
-        width: screen.width + 28,
-        height: screen.height + 30,
-    };
-    canvas.rounded_rect(bezel, 8, 0x2E3236);
-    canvas.rounded_rect(screen, 4, 0x96AC79);
-    draw_screen_numbers(canvas, screen, 496, 0x3A3E42);
-    canvas.line(70, 560, 1010, 560, 2, 0xD5D5D3);
-
-    draw_hinge(canvas, 0x2A6ACC, 0xE8EAEA, 0xD0D2D4);
-
-    canvas.gradient_rounded_rect(
-        Rect {
-            x: 70,
-            y: 742,
-            width: 946,
-            height: 178,
-        },
-        16,
-        0xC5C7C8,
-        0xB4B6B7,
-    );
-    canvas.dot_grid((112, 764), 20, 10, 16, 4, 0x4E5254);
-    canvas.text_centered("www.ggv.com.cn", 790, 898, SZ_TEXT, 0x85898D);
-
-    // Model name in dark brand tone at the upper-left of the shell.
-    canvas.text_centered("NC1020", 175, 64, 36, 0x141E38);
-
-    // Large calligraphic-style brand text (matches the reference's brush logo size).
-    canvas.text_centered("文曲星", 275, 612, 72, 0x2A2E32);
-    canvas.text_centered("®", 395, 562, SZ_SMALL, 0x2A2E32);
-    canvas.rounded_rect(Rect::centered(545, 618, 152, 48), 24, 0x1A1A1A);
-    canvas.text_centered("真人发音", 545, 618, SZ_KEY, WHITE);
-    // Decorative dots around the pronunciation badge
-    for (dx, dy) in [
-        (-82, -8),
-        (-82, 8),
-        (82, -8),
-        (82, 8),
-        (-70, -22),
-        (70, -22),
-        (-70, 22),
-        (70, 22),
-    ] {
-        let x = (545_i32 + dx).max(0) as usize;
-        let y = (618_i32 + dy).max(0) as usize;
-        canvas.circle(x, y, 2, 0x1A1A1A);
-    }
-
-    draw_keys(canvas, MachineModel::Nc1020, layout);
-
-    draw_aux_button(
-        canvas,
-        Rect::centered(105, 950, 82, 52),
-        0xFD8630,
-        0x502800,
-        "发音",
-        SZ_TEXT,
-    );
-    draw_aux_button(
-        canvas,
-        Rect::centered(203, 950, 82, 52),
-        0xFD8630,
-        0x502800,
-        "报时",
-        SZ_TEXT,
-    );
-    canvas.text_centered("RESET", 295, 934, SZ_TEXT, 0x3A3E42);
-    canvas.circle(295, 968, 8, 0x2456B0);
-
-    // Large round ON/OFF button with glossy look
-    canvas.circle(966, 558, 32, 0x7EACC8);
-    canvas.circle(966, 558, 28, 0xB8DAF0);
-    canvas.circle(958, 548, 18, 0xD8EEFC);
-    canvas.ring(966, 558, 32, 3, 0x5A8AAE);
-    canvas.text_centered("ON/OFF", 966, 618, SZ_TAG, 0x1E4E78);
-
-    canvas.rounded_rect(Rect::centered(543, 1370, 112, 26), 8, 0x1E5BC6);
-    canvas.rounded_rect(Rect::centered(543, 1370, 72, 14), 5, 0x0E3E90);
-    canvas.rounded_rect(Rect::centered(105, 1408, 92, 16), 6, 0x1E5BC6);
-    canvas.rounded_rect(Rect::centered(981, 1408, 92, 16), 6, 0x1E5BC6);
-}
-
-fn draw_pc1000(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
-    canvas.gradient_rounded_rect(
-        Rect {
-            x: 34,
-            y: 26,
-            width: 1018,
-            height: 1396,
-        },
-        40,
-        0x26292C,
-        0x141618,
-    );
-    canvas.gradient_rounded_rect(
-        Rect {
-            x: 50,
-            y: 42,
-            width: 986,
-            height: 650,
-        },
-        30,
-        0xCDCDCD,
-        0xBFBFC0,
-    );
-    canvas.gradient_rounded_rect(
-        Rect {
-            x: 50,
-            y: 714,
-            width: 986,
-            height: 694,
-        },
-        32,
-        0xCFCFD0,
-        0xC0C1C1,
-    );
-
-    let bezel = Rect {
-        x: screen.x - 16,
-        y: screen.y - 16,
-        width: screen.width + 32,
-        height: screen.height + 62,
-    };
-    canvas.gradient_rounded_rect(bezel, 10, 0x3B3E41, 0x2E3134);
-    canvas.rounded_rect(screen, 4, 0x94AA76);
-    draw_screen_numbers(canvas, screen, screen.y + screen.height + 27, 0xB4B7B9);
-
-    for (index, (y, label)) in [(150, "同反义"), (232, "变化"), (314, "辨析"), (396, "例句")]
-        .into_iter()
-        .enumerate()
-    {
-        canvas.text_centered(label, 852, y, SZ_TEXT, 0x3A3E42);
-        draw_aux_button(
-            canvas,
-            Rect::centered(932, y, 78, 30),
-            0x4A4E52,
-            0x9FC4E8,
-            &format!("F{}", index + 1),
-            SZ_KEY,
-        );
-    }
-    canvas.rounded_rect(
-        Rect {
-            x: 50,
-            y: 588,
-            width: 986,
-            height: 104,
-        },
-        22,
-        0x2A2D30,
-    );
-    canvas.text_centered("文曲星", 240, 640, 34, 0xF2F2F0);
-    canvas.text_centered("e1000", 430, 640, SZ_LOGO, 0x3E9BD8);
-    canvas.text_centered("真人发音", 838, 494, SZ_KEY, 0x3A3E42);
-    canvas.text_centered("Human Intonation", 838, 518, SZ_SMALL, 0x6E7276);
-    canvas.text_centered("www.ggv.com.cn", 745, 550, SZ_TEXT, 0x85898D);
-
-    canvas.rounded_rect(Rect::centered(165, 712, 214, 64), 24, 0x313437);
-    canvas.rounded_rect(
-        Rect {
-            x: 272,
-            y: 698,
-            width: 300,
-            height: 28,
-        },
-        12,
-        0xC9CBCD,
-    );
-
-    canvas.circle(185, 852, 116, 0x2E3134);
-    canvas.circle(185, 852, 106, 0xC4C6C7);
-    canvas.circle_slats((185, 852), 98, 8, 10, 0x3A3D40);
-
-    canvas.rounded_rect(
-        Rect {
-            x: 560,
-            y: 690,
-            width: 458,
-            height: 90,
-        },
-        34,
-        0xB4B6B7,
-    );
-    canvas.rounded_rect(
-        Rect {
-            x: 578,
-            y: 700,
-            width: 422,
-            height: 70,
-        },
-        30,
-        0x404346,
-    );
-    canvas.triangle(650, 735, 13, (1, 0), 0xE8E8E8);
-    canvas.rounded_rect(Rect::centered(790, 735, 22, 22), 3, 0xE8E8E8);
-    canvas.circle(950, 735, 9, 0xC02020);
-
-    canvas.text_centered("ON/OFF", 344, 739, SZ_TAG, 0x2F5FA8);
-
-    draw_keys(canvas, MachineModel::Pc1000, layout);
-
-    draw_aux_button(
-        canvas,
-        Rect::centered(380, 933, 82, 50),
-        0xF6AE28,
-        0x5E4200,
-        "发音",
-        SZ_TEXT,
-    );
-    draw_aux_button(
-        canvas,
-        Rect::centered(478, 933, 82, 50),
-        0xF6AE28,
-        0x5E4200,
-        "报时",
-        SZ_TEXT,
-    );
-
-    canvas.rounded_rect(Rect::centered(543, 1370, 112, 26), 8, 0x17191B);
-    canvas.rounded_rect(Rect::centered(543, 1370, 72, 14), 5, 0x3A3D40);
-}
-
-fn draw_cc800(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
-    // Outer shell: dark border
-    canvas.gradient_rounded_rect(
-        Rect {
-            x: 40,
-            y: 30,
-            width: 1006,
-            height: 1390,
-        },
-        34,
-        0x3A3D42,
-        0x2A2D32,
-    );
-    // Upper body: periwinkle / lavender blue
-    canvas.gradient_rounded_rect(
-        Rect {
-            x: 56,
-            y: 46,
-            width: 974,
-            height: 644,
-        },
-        26,
-        0x8E9ACC,
-        0x7A86BE,
-    );
-    // Lower body: silver gray
-    canvas.gradient_rounded_rect(
-        Rect {
-            x: 56,
-            y: 714,
-            width: 974,
-            height: 688,
-        },
-        28,
-        0xD0D2D2,
-        0xC2C4C4,
-    );
-
-    // LCD bezel and screen
-    let bezel = Rect {
-        x: screen.x - 12,
-        y: screen.y - 12,
-        width: screen.width + 24,
-        height: screen.height + 26,
-    };
-    canvas.rounded_rect(bezel, 8, 0x2E3134);
-    canvas.rounded_rect(screen, 4, 0x94AA76);
-    canvas.rounded_rect(
-        Rect {
-            x: 95,
-            y: 420,
-            width: 580,
-            height: 32,
-        },
-        8,
-        0xA8ACC8,
-    );
-    draw_screen_numbers(canvas, screen, 436, 0x2A2E40);
-
-    // F-key labels with white pill buttons on the upper body strip
-    for (y, label) in [(130, "报文"), (210, "变化"), (290, "事件"), (370, "闹钟")] {
-        draw_aux_button(
-            canvas,
-            Rect::centered(908, y, 88, 30),
-            0xF4F4F2,
-            0x3A3E42,
-            label,
-            SZ_TAG,
-        );
-        canvas.triangle(852, y, 8, (1, 0), 0x2A2E40);
-    }
-
-    // Silver strip below LCD with ON/OFF, logo, and F-key white buttons
-    canvas.rounded_rect(
-        Rect {
-            x: 70,
-            y: 490,
-            width: 946,
-            height: 190,
-        },
-        16,
-        0xC8CACC,
-    );
-    canvas.text_centered("ON/OFF", 150, 532, SZ_TAG, 0x3A3E42);
-    draw_aux_button(
-        canvas,
-        Rect::centered(150, 568, 60, 32),
-        0xF0F0EE,
-        0x3A3E42,
-        "",
-        SZ_TAG,
-    );
-    canvas.text_centered("文曲星", 380, 572, 36, 0x3A3E42);
-    canvas.text_centered("®", 440, 548, SZ_SMALL, 0x55595C);
-    canvas.rounded_rect(Rect::centered(520, 570, 110, 36), 18, 0x1A1A1A);
-    canvas.text_centered("真人发音", 520, 570, SZ_TAG, WHITE);
-    for (x, label) in [
-        (680, "F1插入"),
-        (770, "F2删除"),
-        (860, "F3查找"),
-        (950, "F4修改"),
-    ] {
-        canvas.text_centered(label, x, 540, SZ_SMALL, 0x3A3E42);
-        draw_aux_button(
-            canvas,
-            Rect::centered(x, 575, 54, 30),
-            0xF0F0EE,
-            0x3A3E42,
-            "",
-            SZ_TAG,
-        );
-    }
-
-    // Speaker grille dots on lower body
-    canvas.dot_grid((124, 780), 9, 2, 26, 3, 0x8E9296);
-    canvas.dot_grid((124, 846), 9, 2, 26, 3, 0x8E9296);
-
-    // Logo text on lower body
-    canvas.text_centered("文曲星", 640, 820, 36, 0x3A3E42);
-    canvas.text_centered("2000A", 780, 820, SZ_NUM, 0x3A3E42);
-    canvas.text_centered("www.ggv.com.cn", 780, 780, SZ_TAG, 0x8E9296);
-
-    draw_hinge(canvas, 0x7A86BE, 0xE0E2E2, 0x9A9DA1);
-
-    draw_keys(canvas, MachineModel::Cc800, layout);
-
-    canvas.circle(120, 940, 7, 0x3A3E42);
-    canvas.text_centered("RESET", 186, 940, SZ_TEXT, 0x4A4E50);
-
-    canvas.rounded_rect(Rect::centered(543, 1370, 112, 26), 8, 0x2E3134);
-    canvas.rounded_rect(Rect::centered(543, 1370, 72, 14), 5, 0x17191B);
-}
-
-fn draw_nc2000(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
-    canvas.gradient_rounded_rect(
-        Rect {
-            x: 40,
-            y: 28,
-            width: 1006,
-            height: 674,
-        },
-        30,
-        0x9AA8DC,
-        0x8898D0,
-    );
-    canvas.gradient_rounded_rect(
-        Rect {
-            x: 54,
-            y: 42,
-            width: 978,
-            height: 646,
-        },
-        24,
-        0xC2C8EA,
-        0xB4BBE4,
-    );
-    canvas.gradient_rounded_rect(
-        Rect {
-            x: 40,
-            y: 718,
-            width: 1006,
-            height: 702,
-        },
-        30,
-        0xCFD2D8,
-        0xC2C5CC,
-    );
-    canvas.gradient_rounded_rect(
-        Rect {
-            x: 54,
-            y: 732,
-            width: 978,
-            height: 674,
-        },
-        24,
-        0xEAEAEA,
-        0xDFDFE0,
-    );
-
-    canvas.rounded_rect(
-        Rect {
-            x: 58,
-            y: 56,
-            width: 970,
-            height: 466,
-        },
-        14,
-        0xEDEEF4,
-    );
-    let bezel = Rect {
-        x: screen.x - 12,
-        y: screen.y - 12,
-        width: screen.width + 24,
-        height: screen.height + 28,
-    };
-    canvas.rounded_rect(bezel, 8, 0x39498C);
-    canvas.rounded_rect(screen, 4, 0xA6BA79);
-    draw_screen_numbers(canvas, screen, 502, 0x2A3C78);
-
-    draw_hinge(canvas, 0x4A6AC8, 0xC9CBCD, 0x9A9DA1);
-
-    canvas.dot_grid((112, 764), 20, 10, 16, 4, 0x4E5866);
-    canvas.text_centered("www.ggv.com.cn", 866, 788, SZ_TEXT, 0x6E7276);
-    canvas.text_centered("文曲星", 790, 862, 34, 0x5A5E6A);
-    canvas.text_centered("NC2000A", 940, 862, SZ_INFO, 0x5A5E6A);
-    canvas.dot_grid((640, 900), 12, 1, 22, 2, 0xB9BCC4);
-
-    canvas.text_centered("文曲星", 285, 650, 34, 0x5A5E6A);
-    canvas.rounded_rect(Rect::centered(505, 650, 122, 40), 20, 0xFFFFFF);
-    canvas.text_centered("真人发音", 505, 650, SZ_TEXT, 0x5A5E6A);
-
-    draw_keys(canvas, MachineModel::Nc2000, layout);
-
-    draw_aux_button(
-        canvas,
-        Rect::centered(112, 946, 76, 48),
-        0xF68729,
-        0x502800,
-        "发音",
-        SZ_TEXT,
-    );
-    draw_aux_button(
-        canvas,
-        Rect::centered(208, 946, 76, 48),
-        0xF68729,
-        0x502800,
-        "报时",
-        SZ_TEXT,
-    );
-    canvas.text_centered("RESET", 305, 932, SZ_TEXT, 0x3A3E42);
-    canvas.circle(305, 962, 8, 0x2F55B4);
-
-    canvas.rounded_rect(Rect::centered(543, 1370, 112, 26), 8, 0x9A9EA6);
-    canvas.rounded_rect(Rect::centered(543, 1370, 72, 14), 5, 0x6E7276);
-}
-
-fn draw_nc3000(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
-    canvas.gradient_rounded_rect(
-        Rect {
-            x: 38,
-            y: 28,
-            width: 1010,
-            height: 1394,
-        },
-        34,
-        0xA4A7AA,
-        0x96999C,
-    );
-    canvas.gradient_rounded_rect(
-        Rect {
-            x: 54,
-            y: 44,
-            width: 978,
-            height: 646,
-        },
-        26,
-        0xDBDCDD,
-        0xCFCFD0,
-    );
-    canvas.gradient_rounded_rect(
-        Rect {
-            x: 54,
-            y: 716,
-            width: 978,
-            height: 690,
-        },
-        28,
-        0xCFD1D2,
-        0xC2C4C5,
-    );
-
-    let bezel = Rect {
-        x: screen.x - 14,
-        y: screen.y - 14,
-        width: screen.width + 28,
-        height: screen.height + 32,
-    };
-    canvas.rounded_rect(bezel, 8, 0x3E4246);
-    canvas.rounded_rect(screen, 4, 0x8DA36F);
-    draw_screen_numbers(canvas, screen, 512, 0x3A3E42);
-    canvas.dot_grid((248, 540), 18, 2, 40, 3, 0xB4B7BA);
-
-    for (index, (y, label)) in [
-        (160, "同反义"),
-        (232, "根查字"),
-        (304, "解析"),
-        (376, "例句"),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        canvas.text_centered(label, 950, y, SZ_TEXT, 0x5A5E62);
-        canvas.text_centered(&format!("F{}", index + 1), 1000, y, SZ_TEXT, 0x5A5E62);
-    }
-    canvas.rounded_rect(Rect::centered(178, 598, 150, 86), 10, 0xC8CACC);
-    canvas.rounded_rect(Rect::centered(178, 598, 142, 78), 8, 0xFFFFFF);
-    canvas.text_centered("剑桥", 178, 574, SZ_TEXT, 0xC02020);
-    canvas.text_centered("AHD", 178, 596, SZ_TEXT, 0xC02020);
-    canvas.rounded_rect(Rect::centered(150, 620, 34, 22), 2, 0x2F55B4);
-    canvas.rounded_rect(Rect::centered(194, 620, 34, 22), 2, 0xC02020);
-
-    canvas.text_centered("文曲星", 245, 84, 22, 0x9A9EA2);
-    canvas.text_centered("NC3000", 385, 84, SZ_INFO, 0x9A9EA2);
-    canvas.text_centered("Electronic dictionary", 543, 664, SZ_INFO, 0x8E9296);
-
-    draw_hinge(canvas, 0xA06438, 0xC9CBCD, 0x9A9DA1);
-
-    canvas.dot_grid((238, 796), 14, 8, 19, 4, 0x9A9EA2);
-    canvas.dot_grid((78, 796), 6, 8, 19, 3, 0xC4C7CA);
-
-    draw_keys(canvas, MachineModel::Nc3000, layout);
-
-    canvas.text_centered("ON/OFF", 140, 780, SZ_TAG, 0x2F55B4);
-    canvas.circle(132, 956, 28, 0x4E5256);
-    canvas.circle(132, 956, 24, 0xC6C8CA);
-    canvas.text_centered("网络", 132, 918, SZ_TAG, 0x2F55B4);
-    for (x, label) in [(278, "发音"), (358, "报时"), (438, "网络")] {
-        draw_aux_button(
-            canvas,
-            Rect::centered(x, 968, 64, 42),
-            0xF6C040,
-            0x6E4A00,
-            label,
-            SZ_TAG,
-        );
-    }
-
-    canvas.circle(905, 890, 98, 0x8E9296);
-    canvas.circle(905, 890, 92, 0xD5D7D8);
-    canvas.circle(905, 890, 72, 0xBEC1C3);
-    canvas.circle(905, 890, 40, 0x587287);
-    canvas.circle(897, 882, 30, 0x66808F);
-    canvas.triangle(905, 833, 9, (0, -1), 0x4E5256);
-    canvas.triangle(905, 947, 9, (0, 1), 0x4E5256);
-    canvas.triangle(848, 890, 9, (-1, 0), 0x4E5256);
-    canvas.triangle(962, 890, 9, (1, 0), 0x4E5256);
-    canvas.text_centered("查看", 872, 782, SZ_TAG, 0x5A5E62);
-    canvas.text_centered("A·P", 925, 782, SZ_SMALL, 0x5A5E62);
-    canvas.text_centered("翻页", 1022, 890, SZ_TAG, 0x5A5E62);
-    canvas.text_centered("发音", 858, 974, SZ_TAG, 0x5A5E62);
-    canvas.text_centered("翻译", 926, 974, SZ_TAG, 0x5A5E62);
-
-    canvas.rounded_rect(Rect::centered(543, 1370, 112, 26), 8, 0x8E9296);
-    canvas.rounded_rect(Rect::centered(543, 1370, 72, 14), 5, 0x5A5E62);
 }
 
 fn draw_keys(canvas: &mut Canvas, model: MachineModel, layout: &[KeyDef]) {
@@ -959,7 +352,11 @@ fn draw_key_captions(canvas: &mut Canvas, model: MachineModel, region: Rect, def
     }
 }
 
-fn draw_styled_button(canvas: &mut Canvas, region: Rect, style: ButtonStyle) -> (Rect, usize) {
+pub(super) fn draw_styled_button(
+    canvas: &mut Canvas,
+    region: Rect,
+    style: ButtonStyle,
+) -> (Rect, usize) {
     let radius = match style.shape {
         ButtonShape::Rect(radius) => radius,
         ButtonShape::Capsule | ButtonShape::Circle => region.height / 2,
@@ -997,7 +394,14 @@ fn draw_styled_button(canvas: &mut Canvas, region: Rect, style: ButtonStyle) -> 
     (inset, inner_radius)
 }
 
-fn draw_aux_button(canvas: &mut Canvas, region: Rect, face: u32, text: u32, label: &str, size: u8) {
+pub(super) fn draw_aux_button(
+    canvas: &mut Canvas,
+    region: Rect,
+    face: u32,
+    text: u32,
+    label: &str,
+    size: u8,
+) {
     draw_styled_button(
         canvas,
         region,
@@ -1017,7 +421,7 @@ fn draw_aux_button(canvas: &mut Canvas, region: Rect, face: u32, text: u32, labe
     );
 }
 
-fn draw_hinge(canvas: &mut Canvas, drum: u32, bar: u32, notch: u32) {
+pub(super) fn draw_hinge(canvas: &mut Canvas, drum: u32, bar: u32, notch: u32) {
     // Silver cylinder body with colored end caps.
     canvas.rounded_rect(Rect::centered(165, 712, 214, 66), 26, bar);
     canvas.rounded_rect(Rect::centered(75, 712, 60, 66), 26, drum);
@@ -1029,7 +433,7 @@ fn draw_hinge(canvas: &mut Canvas, drum: u32, bar: u32, notch: u32) {
     canvas.rounded_rect(Rect::centered(543, 712, 130, 14), 6, notch);
 }
 
-fn draw_screen_numbers(canvas: &mut Canvas, screen: Rect, y: usize, color: u32) {
+pub(super) fn draw_screen_numbers(canvas: &mut Canvas, screen: Rect, y: usize, color: u32) {
     for number in 1..=9 {
         let x = screen.x + screen.width * number / 10;
         canvas.text_centered(&number.to_string(), x, y, SZ_NUM, color);
@@ -1465,7 +869,7 @@ fn text_width(text: &str, size: u8) -> i32 {
     width
 }
 
-fn mix(first: u32, second: u32, first_weight: u32, second_weight: u32) -> u32 {
+pub(super) fn mix(first: u32, second: u32, first_weight: u32, second_weight: u32) -> u32 {
     let total = first_weight + second_weight;
     let channel = |shift: u32| {
         (((first >> shift) & 0xFFu32) * first_weight
@@ -1475,22 +879,28 @@ fn mix(first: u32, second: u32, first_weight: u32, second_weight: u32) -> u32 {
     (channel(16) << 16) | (channel(8) << 8) | channel(0)
 }
 
-struct Canvas {
+pub(super) struct Canvas {
     pixels: Vec<u32>,
 }
 
 impl Canvas {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             pixels: vec![WINDOW_BACKGROUND; SOURCE_WIDTH * SOURCE_HEIGHT],
         }
     }
 
-    fn rounded_rect(&mut self, rect: Rect, radius: usize, color: u32) {
+    pub(super) fn rounded_rect(&mut self, rect: Rect, radius: usize, color: u32) {
         self.paint_rounded_rect(rect, radius, |_| color);
     }
 
-    fn gradient_rounded_rect(&mut self, rect: Rect, radius: usize, top: u32, bottom: u32) {
+    pub(super) fn gradient_rounded_rect(
+        &mut self,
+        rect: Rect,
+        radius: usize,
+        top: u32,
+        bottom: u32,
+    ) {
         let span = rect.height.max(1).saturating_sub(1);
         self.paint_rounded_rect(rect, radius, |row| {
             let weight = row.min(span);
@@ -1522,7 +932,7 @@ impl Canvas {
         }
     }
 
-    fn circle(&mut self, center_x: usize, center_y: usize, radius: usize, color: u32) {
+    pub(super) fn circle(&mut self, center_x: usize, center_y: usize, radius: usize, color: u32) {
         let rect = Rect::centered(center_x, center_y, radius * 2 + 1, radius * 2 + 1);
         for y in rect.y..(rect.y + rect.height).min(SOURCE_HEIGHT) {
             for x in rect.x..(rect.x + rect.width).min(SOURCE_WIDTH) {
@@ -1535,7 +945,7 @@ impl Canvas {
         }
     }
 
-    fn ring(
+    pub(super) fn ring(
         &mut self,
         center_x: usize,
         center_y: usize,
@@ -1557,7 +967,7 @@ impl Canvas {
         }
     }
 
-    fn circle_slats(
+    pub(super) fn circle_slats(
         &mut self,
         center: (usize, usize),
         radius: usize,
@@ -1589,7 +999,7 @@ impl Canvas {
         }
     }
 
-    fn dot_grid(
+    pub(super) fn dot_grid(
         &mut self,
         origin: (usize, usize),
         columns: usize,
@@ -1610,7 +1020,7 @@ impl Canvas {
         }
     }
 
-    fn triangle(
+    pub(super) fn triangle(
         &mut self,
         center_x: usize,
         center_y: usize,
@@ -1659,7 +1069,15 @@ impl Canvas {
         }
     }
 
-    fn line(&mut self, x0: usize, y0: usize, x1: usize, y1: usize, thickness: usize, color: u32) {
+    pub(super) fn line(
+        &mut self,
+        x0: usize,
+        y0: usize,
+        x1: usize,
+        y1: usize,
+        thickness: usize,
+        color: u32,
+    ) {
         let steps = x0.abs_diff(x1).max(y0.abs_diff(y1)).max(1);
         for step in 0..=steps {
             let x = x0 as isize + (x1 as isize - x0 as isize) * step as isize / steps as isize;
@@ -1672,7 +1090,7 @@ impl Canvas {
         }
     }
 
-    fn text_centered(
+    pub(super) fn text_centered(
         &mut self,
         text: &str,
         center_x: usize,
@@ -1694,7 +1112,7 @@ impl Canvas {
         );
     }
 
-    fn draw_text(&mut self, text: &str, x: i32, baseline_y: i32, size: u8, color: u32) {
+    pub(super) fn draw_text(&mut self, text: &str, x: i32, baseline_y: i32, size: u8, color: u32) {
         let mut pen = x;
         for ch in text.chars() {
             match font::glyph(ch, size) {
@@ -1734,7 +1152,7 @@ impl Canvas {
         }
     }
 
-    fn resize(self, width: usize, height: usize) -> Vec<u32> {
+    pub(super) fn resize(self, width: usize, height: usize) -> Vec<u32> {
         let mut raw = Vec::with_capacity(self.pixels.len() * 3);
         for color in self.pixels {
             raw.push(((color >> 16) & 0xFF) as u8);
