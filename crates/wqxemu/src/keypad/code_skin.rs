@@ -707,7 +707,7 @@ fn draw_key(canvas: &mut Canvas, model: MachineModel, region: Rect, def: &KeyDef
                 letter,
                 region.x + region.width * 25 / 100,
                 region.y + region.height / 2,
-                SZ_INFO,
+                SZ_LOGO,
                 style.text,
             );
         }
@@ -739,7 +739,7 @@ fn draw_key(canvas: &mut Canvas, model: MachineModel, region: Rect, def: &KeyDef
             number,
             segment.x + segment.width / 2 + 1,
             region.y + region.height / 2,
-            SZ_NUM,
+            SZ_LOGO,
             segment_text_color(model),
         );
     } else if let Some(direction) = arrow_direction(def.label) {
@@ -793,28 +793,60 @@ fn draw_key(canvas: &mut Canvas, model: MachineModel, region: Rect, def: &KeyDef
         }
     } else {
         let label = display_label(model, def);
+        let has_sub = key_sublabel(model, def).is_some();
+        let is_cjk = label.chars().any(|ch| ch as u32 > 0x7F);
         let size = if matches!(def.label, "ON" | "PWR") {
             SZ_TEXT
+        } else if has_sub && !is_cjk {
+            SZ_LOGO
         } else {
             SZ_KEY
         };
-        canvas.text_centered(
-            label,
-            region.x + region.width / 2,
-            region.y + region.height / 2,
-            size,
-            style.text,
-        );
-        // Sublabel as subscript at the lower-right of the main letter.
-        if let Some((sub, color)) = key_sublabel(model, def) {
-            let letter_half = text_width(label, size) as usize / 2;
-            let sub_half = text_width(sub, SZ_KEY) as usize / 2;
+        if has_sub && !is_cjk {
+            // Latin two-function key: primary letter on the left,
+            // vertically centered; secondary label at the lower-right.
             canvas.text_centered(
-                sub,
-                region.x + region.width / 2 + letter_half + sub_half + 1,
-                region.y + region.height / 2 + 10,
-                SZ_KEY,
-                color,
+                label,
+                region.x + region.width * 30 / 100,
+                region.y + region.height / 2,
+                size,
+                style.text,
+            );
+            if let Some((sub, color)) = key_sublabel(model, def) {
+                canvas.text_centered(
+                    sub,
+                    region.x + region.width * 70 / 100,
+                    region.y + region.height * 72 / 100,
+                    SZ_INFO,
+                    color,
+                );
+            }
+        } else if has_sub {
+            // CJK two-function key: centered main label with a
+            // lower-right subscript, matching the device silk-screen.
+            canvas.text_centered(
+                label,
+                region.x + region.width / 2,
+                region.y + region.height * 40 / 100,
+                size,
+                style.text,
+            );
+            if let Some((sub, color)) = key_sublabel(model, def) {
+                canvas.text_centered(
+                    sub,
+                    region.x + region.width * 70 / 100,
+                    region.y + region.height * 72 / 100,
+                    SZ_KEY,
+                    color,
+                );
+            }
+        } else {
+            canvas.text_centered(
+                label,
+                region.x + region.width / 2,
+                region.y + region.height / 2,
+                size,
+                style.text,
             );
         }
         if def.label == "ENT" {
@@ -825,10 +857,10 @@ fn draw_key(canvas: &mut Canvas, model: MachineModel, region: Rect, def: &KeyDef
             };
             canvas.text_centered(
                 tail,
-                region.x + region.width - 18,
-                region.y + region.height - 10,
-                SZ_SMALL,
-                style.text,
+                region.x + region.width * 70 / 100,
+                region.y + region.height * 70 / 100,
+                SZ_INFO,
+                sublabel_color(model),
             );
         }
     }
@@ -842,9 +874,9 @@ fn draw_key(canvas: &mut Canvas, model: MachineModel, region: Rect, def: &KeyDef
 fn draw_key_captions(canvas: &mut Canvas, model: MachineModel, region: Rect, def: &KeyDef) {
     if let Some((category, color)) = category_label(model, def) {
         let (size, offset) = if model == MachineModel::Nc3000 {
-            (SZ_SMALL, 35)
+            (SZ_INFO, 38)
         } else {
-            (SZ_TAG, 13)
+            (SZ_INFO, 16)
         };
         canvas.text_centered(
             category,
@@ -873,8 +905,8 @@ fn draw_key_captions(canvas: &mut Canvas, model: MachineModel, region: Rect, def
                 canvas.text_centered(
                     &label,
                     region.x + region.width / 2 + 8,
-                    region.y - 13,
-                    SZ_TAG,
+                    region.y - 16,
+                    SZ_INFO,
                     0x3A3E42,
                 );
             }
@@ -882,8 +914,8 @@ fn draw_key_captions(canvas: &mut Canvas, model: MachineModel, region: Rect, def
                 canvas.text_centered(
                     &format!("F{} {caption}", def.dcol - 1),
                     region.x + region.width / 2,
-                    region.y - 13,
-                    SZ_TAG,
+                    region.y - 16,
+                    SZ_INFO,
                     0x2A3C78,
                 );
             }
@@ -891,8 +923,8 @@ fn draw_key_captions(canvas: &mut Canvas, model: MachineModel, region: Rect, def
                 canvas.text_centered(
                     &format!("F{}", def.dcol - 1),
                     region.x + region.width / 2,
-                    region.y - 13,
-                    SZ_SMALL,
+                    region.y - 16,
+                    SZ_INFO,
                     0x9FC4E8,
                 );
             }
@@ -900,8 +932,8 @@ fn draw_key_captions(canvas: &mut Canvas, model: MachineModel, region: Rect, def
                 canvas.text_centered(
                     caption,
                     region.x + region.width / 2,
-                    region.y - 15,
-                    SZ_TAG,
+                    region.y - 18,
+                    SZ_INFO,
                     0x9B2A20,
                 );
             }
@@ -909,8 +941,8 @@ fn draw_key_captions(canvas: &mut Canvas, model: MachineModel, region: Rect, def
                 canvas.text_centered(
                     caption,
                     region.x + region.width / 2,
-                    region.y - 15,
-                    SZ_TAG,
+                    region.y - 18,
+                    SZ_INFO,
                     0x3A3E42,
                 );
             }
@@ -920,8 +952,8 @@ fn draw_key_captions(canvas: &mut Canvas, model: MachineModel, region: Rect, def
         canvas.text_centered(
             superscript,
             region.x + region.width / 2,
-            region.y - 14,
-            SZ_KEY,
+            region.y - 8,
+            SZ_INFO,
             color,
         );
     }
@@ -1302,7 +1334,6 @@ fn category_label(model: MachineModel, def: &KeyDef) -> Option<(&'static str, u3
         (MachineModel::Nc3000, _, _) => None,
         (MachineModel::Cc800, 0, 6) => Some(("网络", color)),
         (_, 0, column @ 0..=5) => Some((entries[column as usize], color)),
-        (_, 5, 6) => Some(("-", color)),
         _ => None,
     }
 }
@@ -1337,8 +1368,8 @@ fn key_superscript(model: MachineModel, def: &KeyDef) -> Option<(&'static str, u
             (MachineModel::Nc2000, 3) => Some(("录音", color)),
             (_, 1) => Some(("SHIFT", color)),
             (_, 2) => Some(("CAPS", color)),
-            (_, 4) => Some(("−", color)),
-            (_, 5) => Some(("√", color)),
+            (_, 5) => Some(("−", color)),
+            (_, 6) => Some(("√", color)),
             _ => None,
         };
     }
