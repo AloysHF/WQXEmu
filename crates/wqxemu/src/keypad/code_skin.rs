@@ -113,7 +113,7 @@ fn draw_nc1020(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
     draw_screen_numbers(canvas, screen, 496, 0x3A3E42);
     canvas.line(70, 560, 1010, 560, 2, 0xD5D5D3);
 
-    draw_hinge(canvas, 0x1A50AC, 0xC9CBCD, 0x9A9DA1);
+    draw_hinge(canvas, 0x2A6ACC, 0xE8EAEA, 0xD0D2D4);
 
     canvas.gradient_rounded_rect(
         Rect {
@@ -129,11 +129,29 @@ fn draw_nc1020(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
     canvas.dot_grid((112, 764), 20, 10, 16, 4, 0x4E5254);
     canvas.text_centered("www.ggv.com.cn", 790, 898, SZ_TEXT, 0x85898D);
 
-    canvas.text_centered("NC1020", 175, 60, SZ_LOGO, 0x1E5BC6);
-    canvas.text_centered("文曲星", 225, 622, 48, 0x85898D);
-    canvas.text_centered("®", 305, 588, SZ_SMALL, 0x85898D);
-    canvas.rounded_rect(Rect::centered(490, 622, 132, 44), 22, 0xFFFFFF);
-    canvas.text_centered("真人发音", 490, 622, SZ_KEY, 0x5A5E62);
+    // Model name in dark brand tone at the upper-left of the shell.
+    canvas.text_centered("NC1020", 175, 64, 36, 0x141E38);
+
+    // Large calligraphic-style brand text (matches the reference's brush logo size).
+    canvas.text_centered("文曲星", 275, 612, 72, 0x2A2E32);
+    canvas.text_centered("®", 395, 562, SZ_SMALL, 0x2A2E32);
+    canvas.rounded_rect(Rect::centered(545, 618, 152, 48), 24, 0x1A1A1A);
+    canvas.text_centered("真人发音", 545, 618, SZ_KEY, WHITE);
+    // Decorative dots around the pronunciation badge
+    for (dx, dy) in [
+        (-82, -8),
+        (-82, 8),
+        (82, -8),
+        (82, 8),
+        (-70, -22),
+        (70, -22),
+        (-70, 22),
+        (70, 22),
+    ] {
+        let x = (545_i32 + dx).max(0) as usize;
+        let y = (618_i32 + dy).max(0) as usize;
+        canvas.circle(x, y, 2, 0x1A1A1A);
+    }
 
     draw_keys(canvas, MachineModel::Nc1020, layout);
 
@@ -156,8 +174,12 @@ fn draw_nc1020(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
     canvas.text_centered("RESET", 295, 934, SZ_TEXT, 0x3A3E42);
     canvas.circle(295, 968, 8, 0x2456B0);
 
-    canvas.ring(966, 560, 26, 4, 0xCDE6F4);
-    canvas.text_centered("ON/OFF", 966, 616, SZ_TAG, 0x1E4E78);
+    // Large round ON/OFF button with glossy look
+    canvas.circle(966, 558, 32, 0x7EACC8);
+    canvas.circle(966, 558, 28, 0xB8DAF0);
+    canvas.circle(958, 548, 18, 0xD8EEFC);
+    canvas.ring(966, 558, 32, 3, 0x5A8AAE);
+    canvas.text_centered("ON/OFF", 966, 618, SZ_TAG, 0x1E4E78);
 
     canvas.rounded_rect(Rect::centered(543, 1370, 112, 26), 8, 0x1E5BC6);
     canvas.rounded_rect(Rect::centered(543, 1370, 72, 14), 5, 0x0E3E90);
@@ -306,6 +328,7 @@ fn draw_pc1000(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
 }
 
 fn draw_cc800(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
+    // Outer shell: dark border
     canvas.gradient_rounded_rect(
         Rect {
             x: 40,
@@ -314,9 +337,10 @@ fn draw_cc800(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
             height: 1390,
         },
         34,
-        0x44474A,
-        0x35383B,
+        0x3A3D42,
+        0x2A2D32,
     );
+    // Upper body: periwinkle / lavender blue
     canvas.gradient_rounded_rect(
         Rect {
             x: 56,
@@ -325,9 +349,10 @@ fn draw_cc800(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
             height: 644,
         },
         26,
-        0xD4D5D5,
-        0xC6C7C7,
+        0x8E9ACC,
+        0x7A86BE,
     );
+    // Lower body: silver gray
     canvas.gradient_rounded_rect(
         Rect {
             x: 56,
@@ -336,10 +361,11 @@ fn draw_cc800(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
             height: 688,
         },
         28,
-        0xCBCDCD,
-        0xBEC0C0,
+        0xD0D2D2,
+        0xC2C4C4,
     );
 
+    // LCD bezel and screen
     let bezel = Rect {
         x: screen.x - 12,
         y: screen.y - 12,
@@ -356,10 +382,11 @@ fn draw_cc800(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
             height: 32,
         },
         8,
-        0xB4B6B5,
+        0xA8ACC8,
     );
-    draw_screen_numbers(canvas, screen, 436, 0x3A3E42);
+    draw_screen_numbers(canvas, screen, 436, 0x2A2E40);
 
+    // F-key labels with white pill buttons on the upper body strip
     for (y, label) in [(130, "报文"), (210, "变化"), (290, "事件"), (370, "闹钟")] {
         draw_aux_button(
             canvas,
@@ -369,23 +396,65 @@ fn draw_cc800(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
             label,
             SZ_TAG,
         );
-        canvas.triangle(852, y, 8, (1, 0), 0x3A3E42);
+        canvas.triangle(852, y, 8, (1, 0), 0x2A2E40);
     }
-    canvas.dot_grid((124, 534), 9, 2, 26, 3, 0x7E8286);
-    canvas.dot_grid((124, 600), 9, 2, 26, 3, 0x7E8286);
-    canvas.text_centered("文曲星", 790, 548, 40, 0x3A3E42);
-    canvas.text_centered("®", 858, 518, SZ_SMALL, 0x55595C);
-    canvas.text_centered("CC800", 900, 612, SZ_NUM, 0x3A3E42);
-    canvas.text_centered("GOLDEN GLOBAL VIEW", 690, 572, SZ_SMALL, 0x2F5FA8);
-    canvas.text_centered("www.ggv.com.cn", 660, 606, SZ_TAG, 0x7E8286);
 
-    draw_hinge(canvas, 0xB9BBBC, 0xE9E9E7, 0x9A9DA1);
+    // Silver strip below LCD with ON/OFF, logo, and F-key white buttons
+    canvas.rounded_rect(
+        Rect {
+            x: 70,
+            y: 490,
+            width: 946,
+            height: 190,
+        },
+        16,
+        0xC8CACC,
+    );
+    canvas.text_centered("ON/OFF", 150, 532, SZ_TAG, 0x3A3E42);
+    draw_aux_button(
+        canvas,
+        Rect::centered(150, 568, 60, 32),
+        0xF0F0EE,
+        0x3A3E42,
+        "",
+        SZ_TAG,
+    );
+    canvas.text_centered("文曲星", 380, 572, 36, 0x3A3E42);
+    canvas.text_centered("®", 440, 548, SZ_SMALL, 0x55595C);
+    canvas.rounded_rect(Rect::centered(520, 570, 110, 36), 18, 0x1A1A1A);
+    canvas.text_centered("真人发音", 520, 570, SZ_TAG, WHITE);
+    for (x, label) in [
+        (680, "F1插入"),
+        (770, "F2删除"),
+        (860, "F3查找"),
+        (950, "F4修改"),
+    ] {
+        canvas.text_centered(label, x, 540, SZ_SMALL, 0x3A3E42);
+        draw_aux_button(
+            canvas,
+            Rect::centered(x, 575, 54, 30),
+            0xF0F0EE,
+            0x3A3E42,
+            "",
+            SZ_TAG,
+        );
+    }
+
+    // Speaker grille dots on lower body
+    canvas.dot_grid((124, 780), 9, 2, 26, 3, 0x8E9296);
+    canvas.dot_grid((124, 846), 9, 2, 26, 3, 0x8E9296);
+
+    // Logo text on lower body
+    canvas.text_centered("文曲星", 640, 820, 36, 0x3A3E42);
+    canvas.text_centered("2000A", 780, 820, SZ_NUM, 0x3A3E42);
+    canvas.text_centered("www.ggv.com.cn", 780, 780, SZ_TAG, 0x8E9296);
+
+    draw_hinge(canvas, 0x7A86BE, 0xE0E2E2, 0x9A9DA1);
 
     draw_keys(canvas, MachineModel::Cc800, layout);
 
-    canvas.circle(120, 902, 7, 0x3A3E42);
-    canvas.text_centered("RESET", 186, 902, SZ_TEXT, 0x4A4E50);
-    canvas.text_centered("ON/OFF", 978, 902, SZ_TEXT, 0x3A3E42);
+    canvas.circle(120, 940, 7, 0x3A3E42);
+    canvas.text_centered("RESET", 186, 940, SZ_TEXT, 0x4A4E50);
 
     canvas.rounded_rect(Rect::centered(543, 1370, 112, 26), 8, 0x2E3134);
     canvas.rounded_rect(Rect::centered(543, 1370, 72, 14), 5, 0x17191B);
@@ -617,25 +686,26 @@ fn draw_key(canvas: &mut Canvas, model: MachineModel, region: Rect, def: &KeyDef
     let (inset, radius) = draw_styled_button(canvas, region, style);
 
     if let Some(number) = numeric_legend(def) {
-        let segment_color = segment_color(model);
-        let seg_width = inset.width * 45 / 100;
+        let seg_color = segment_color(model);
+        // Colored segment covers the right ~40% of the key face.
+        let seg_width = inset.width * 40 / 100;
         let segment = Rect {
             x: inset.x + inset.width - seg_width,
-            y: inset.y + 2,
-            width: seg_width.saturating_sub(2),
-            height: inset.height - 4,
+            y: inset.y + 1,
+            width: seg_width - 1,
+            height: inset.height - 2,
         };
-        canvas.gradient_rounded_rect_right(
+        canvas.gradient_rounded_rect(
             segment,
-            radius.saturating_sub(3).max(2),
-            mix(segment_color, WHITE, 5, 1),
-            mix(segment_color, BLACK, 9, 1),
+            radius.saturating_sub(2).max(2),
+            mix(seg_color, WHITE, 5, 1),
+            mix(seg_color, BLACK, 8, 1),
         );
         if def.drow != 5 {
             let letter = def.label.split('/').next().unwrap_or(def.label);
             canvas.text_centered(
                 letter,
-                region.x + region.width * 27 / 100,
+                region.x + region.width * 25 / 100,
                 region.y + region.height / 2,
                 SZ_INFO,
                 style.text,
@@ -649,9 +719,19 @@ fn draw_key(canvas: &mut Canvas, model: MachineModel, region: Rect, def: &KeyDef
             };
             canvas.text_centered(
                 symbol,
-                region.x + 26,
+                region.x + 24,
                 region.y + region.height / 2,
                 SZ_TAG,
+                style.text,
+            );
+        }
+        if def.drow == 5 && def.dcol == 5 {
+            // Dot key shows "·" on the left and "•" on the segment.
+            canvas.text_centered(
+                "·",
+                region.x + region.width * 25 / 100,
+                region.y + region.height / 2,
+                SZ_NUM,
                 style.text,
             );
         }
@@ -672,8 +752,35 @@ fn draw_key(canvas: &mut Canvas, model: MachineModel, region: Rect, def: &KeyDef
             "DN" if model != MachineModel::Nc1020 => "+",
             _ => "",
         };
+        // Mark text uses a separate color: dark for "税", blue for M+/M-.
+        let mark_color = match def.label {
+            "PGUP" => 0x2A2E32,
+            _ => sublabel_color(model),
+        };
+        // PGUP/PGDN are page-style keys and use double arrowheads;
+        // the cursor keys (UP/DN/LT/RT) use a single arrowhead.
+        let double = matches!(def.label, "PGUP" | "PGDN");
         let center_x = region.x + region.width / 2 - if mark.is_empty() { 0 } else { 6 };
-        canvas.triangle(center_x, region.y + region.height / 2, 12, direction, color);
+        let center_y = region.y + region.height / 2;
+        if double {
+            let (dx, dy) = direction;
+            canvas.triangle(
+                (center_x as i32 - dx as i32 * 10).max(0) as usize,
+                (center_y as i32 - dy as i32 * 10).max(0) as usize,
+                10,
+                direction,
+                color,
+            );
+            canvas.triangle(
+                (center_x as i32 + dx as i32 * 10).max(0) as usize,
+                (center_y as i32 + dy as i32 * 10).max(0) as usize,
+                10,
+                direction,
+                color,
+            );
+        } else {
+            canvas.triangle(center_x, center_y, 12, direction, color);
+        }
         if !mark.is_empty() {
             let size = if mark == "税" { SZ_TAG } else { SZ_SMALL };
             canvas.text_centered(
@@ -681,7 +788,7 @@ fn draw_key(canvas: &mut Canvas, model: MachineModel, region: Rect, def: &KeyDef
                 region.x + region.width / 2 + 16,
                 region.y + region.height / 2 + 8,
                 size,
-                color,
+                mark_color,
             );
         }
     } else {
@@ -698,12 +805,15 @@ fn draw_key(canvas: &mut Canvas, model: MachineModel, region: Rect, def: &KeyDef
             size,
             style.text,
         );
+        // Sublabel as subscript at the lower-right of the main letter.
         if let Some((sub, color)) = key_sublabel(model, def) {
+            let letter_half = text_width(label, size) as usize / 2;
+            let sub_half = text_width(sub, SZ_KEY) as usize / 2;
             canvas.text_centered(
                 sub,
-                region.x + region.width - 20,
-                region.y + region.height - 10,
-                SZ_SMALL,
+                region.x + region.width / 2 + letter_half + sub_half + 1,
+                region.y + region.height / 2 + 10,
+                SZ_KEY,
                 color,
             );
         }
@@ -715,7 +825,7 @@ fn draw_key(canvas: &mut Canvas, model: MachineModel, region: Rect, def: &KeyDef
             };
             canvas.text_centered(
                 tail,
-                region.x + region.width - 20,
+                region.x + region.width - 18,
                 region.y + region.height - 10,
                 SZ_SMALL,
                 style.text,
@@ -747,21 +857,24 @@ fn draw_key_captions(canvas: &mut Canvas, model: MachineModel, region: Rect, def
     if let Some(caption) = f_key_caption(model, def) {
         match model {
             MachineModel::Nc1020 => {
-                let right = region.x as i32 - 8;
-                let label_width = text_width(caption, SZ_TEXT);
-                let number = format!("F{}", def.dcol - 1);
-                canvas.text_right(
-                    caption,
-                    right,
-                    region.y + region.height / 2,
-                    SZ_TEXT,
+                // White pill button to the LEFT of the blue F key.
+                let pill_captions = ["同反义", "变化", "解析", "例句"];
+                let pill = pill_captions[(def.dcol - 2) as usize];
+                draw_aux_button(
+                    canvas,
+                    Rect::centered(856, region.y + region.height / 2, 78, 28),
+                    0xFAFAF8,
                     0x3A3E42,
+                    pill,
+                    SZ_TAG,
                 );
-                canvas.text_right(
-                    &number,
-                    right - label_width - 8,
-                    region.y + region.height / 2,
-                    SZ_TEXT,
+                // Label text ("F1 插入") above the blue button, shifted right.
+                let label = format!("F{} {}", def.dcol - 1, caption);
+                canvas.text_centered(
+                    &label,
+                    region.x + region.width / 2 + 8,
+                    region.y - 13,
+                    SZ_TAG,
                     0x3A3E42,
                 );
             }
@@ -804,16 +917,11 @@ fn draw_key_captions(canvas: &mut Canvas, model: MachineModel, region: Rect, def
         }
     }
     if let Some((superscript, color)) = key_superscript(model, def) {
-        let size = if superscript.chars().any(|ch| ch as u32 > 0x7F) {
-            SZ_TAG
-        } else {
-            SZ_SMALL
-        };
         canvas.text_centered(
             superscript,
             region.x + region.width / 2,
-            region.y - 13,
-            size,
+            region.y - 14,
+            SZ_KEY,
             color,
         );
     }
@@ -878,8 +986,13 @@ fn draw_aux_button(canvas: &mut Canvas, region: Rect, face: u32, text: u32, labe
 }
 
 fn draw_hinge(canvas: &mut Canvas, drum: u32, bar: u32, notch: u32) {
-    canvas.rounded_rect(Rect::centered(165, 712, 214, 66), 26, drum);
-    canvas.rounded_rect(Rect::centered(921, 712, 214, 66), 26, drum);
+    // Silver cylinder body with colored end caps.
+    canvas.rounded_rect(Rect::centered(165, 712, 214, 66), 26, bar);
+    canvas.rounded_rect(Rect::centered(75, 712, 60, 66), 26, drum);
+    canvas.rounded_rect(Rect::centered(255, 712, 60, 66), 26, drum);
+    canvas.rounded_rect(Rect::centered(921, 712, 214, 66), 26, bar);
+    canvas.rounded_rect(Rect::centered(831, 712, 60, 66), 26, drum);
+    canvas.rounded_rect(Rect::centered(1011, 712, 60, 66), 26, drum);
     canvas.rounded_rect(Rect::centered(543, 712, 470, 30), 12, bar);
     canvas.rounded_rect(Rect::centered(543, 712, 130, 14), 6, notch);
 }
@@ -894,10 +1007,10 @@ fn draw_screen_numbers(canvas: &mut Canvas, screen: Rect, y: usize, color: u32) 
 fn key_style(model: MachineModel, def: &KeyDef) -> ButtonStyle {
     let base = match model {
         MachineModel::Nc1020 => ButtonStyle {
-            face: 0xDCDBD9,
-            border: 0x6E7072,
-            text: 0x1B1D1F,
-            shape: ButtonShape::Rect(6),
+            face: 0xDCD8D0,
+            border: 0x8E8878,
+            text: 0x2A2418,
+            shape: ButtonShape::Rect(8),
         },
         MachineModel::Nc2000 => ButtonStyle {
             face: 0xD8D9D7,
@@ -926,34 +1039,34 @@ fn key_style(model: MachineModel, def: &KeyDef) -> ButtonStyle {
     };
     match (model, def.drow, def.dcol) {
         (MachineModel::Nc1020, 0, _) => ButtonStyle {
-            face: 0xADA3C1,
-            border: 0x55506A,
+            face: 0xB0A8C2,
+            border: 0x5A5470,
             text: 0x2E2A3A,
-            shape: ButtonShape::Rect(6),
+            shape: ButtonShape::Rect(8),
         },
         (MachineModel::Nc1020, 1, 2..=5) => ButtonStyle {
-            face: 0xA5CEE3,
+            face: 0xA8D0E4,
             border: 0x4E7896,
             text: 0x1E4E78,
-            shape: ButtonShape::Rect(6),
+            shape: ButtonShape::Rect(8),
         },
         (MachineModel::Nc1020, 1, 8) => ButtonStyle {
-            face: 0xA5CDE2,
+            face: 0xA8D0E4,
             border: 0x4E7896,
             text: 0x1E4E78,
             shape: ButtonShape::Circle,
         },
         (MachineModel::Nc1020, 3, 9) => ButtonStyle {
-            face: 0xFD8630,
+            face: 0xF89040,
             border: 0xA85410,
             text: 0x502800,
-            shape: ButtonShape::Rect(6),
+            shape: ButtonShape::Rect(8),
         },
         (MachineModel::Nc1020, 5, 0) => ButtonStyle {
-            face: 0xDCDBD9,
-            border: 0x6E7072,
+            face: 0xE8E0D0,
+            border: 0x8E8878,
             text: 0xC0202C,
-            shape: ButtonShape::Rect(6),
+            shape: ButtonShape::Rect(8),
         },
         (MachineModel::Pc1000, 0, 6) => ButtonStyle {
             face: 0xF6AE28,
@@ -1067,16 +1180,16 @@ fn numeric_legend(def: &KeyDef) -> Option<&'static str> {
         (3, 4..=6) => Some(["4", "5", "6"][(def.dcol - 4) as usize]),
         (4, 4..=6) => Some(["1", "2", "3"][(def.dcol - 4) as usize]),
         (5, 4) => Some("0"),
-        (5, 5) => Some("."),
+        (5, 5) => Some("•"),
         _ => None,
     }
 }
 
 fn segment_color(model: MachineModel) -> u32 {
     match model {
-        MachineModel::Nc1020 => 0x0F56C4,
+        MachineModel::Nc1020 => 0x1A5ECC,
         MachineModel::Pc1000 => 0x6FD1CF,
-        MachineModel::Cc800 => 0xE3BE62,
+        MachineModel::Cc800 => 0x2856B8,
         MachineModel::Nc2000 => 0x4048C8,
         MachineModel::Nc3000 => 0x7AC8CE,
     }
@@ -1084,7 +1197,7 @@ fn segment_color(model: MachineModel) -> u32 {
 
 fn segment_text_color(model: MachineModel) -> u32 {
     match model {
-        MachineModel::Pc1000 => 0x0F3548,
+        MachineModel::Pc1000 | MachineModel::Nc3000 => 0x0F3548,
         _ => 0xFFFFFF,
     }
 }
@@ -1224,22 +1337,27 @@ fn key_superscript(model: MachineModel, def: &KeyDef) -> Option<(&'static str, u
             (MachineModel::Nc2000, 3) => Some(("录音", color)),
             (_, 1) => Some(("SHIFT", color)),
             (_, 2) => Some(("CAPS", color)),
+            (_, 4) => Some(("−", color)),
+            (_, 5) => Some(("√", color)),
             _ => None,
         };
     }
     let latin = match (def.drow, def.dcol) {
-        (2, 0) => "sin-1",
-        (2, 1) => "cos-1",
-        (2, 2) => "tan-1",
+        (2, 0) => "sin⁻¹",
+        (2, 1) => "cos⁻¹",
+        (2, 2) => "tan⁻¹",
         (2, 3) => "hyp",
         (2, 8) => "#",
-        (3, 0) => "10x",
-        (3, 1) => "ex",
-        (3, 3) => "x2",
+        (2, 9) => "合",
+        (3, 0) => "10ˣ",
+        (3, 1) => "eˣ",
+        (3, 2) => "ʸ√x",
+        (3, 3) => "x²",
         (3, 7) => "?",
         (3, 8) => "*",
         (4, 0) => ")",
         (4, 1) => "x!",
+        (4, 2) => "° //”",
         _ => return None,
     };
     if model == MachineModel::Cc800 && (def.drow, def.dcol) == (2, 2) {
@@ -1262,16 +1380,24 @@ fn key_sublabel(model: MachineModel, def: &KeyDef) -> Option<(&'static str, u32)
         (2, 2) => "tan",
         (2, 3) => "1/x",
         (2, 7) => "%",
+        (2, 8) => "÷",
         (2, 9) => "MC",
         (3, 0) => "log",
         (3, 1) => "ln",
-        (3, 2) => "xy",
+        (3, 2) => "xʸ",
+        (3, 3) => "√",
+        (3, 7) => "±",
         (3, 8) => "x",
+        (4, 0) => "(",
+        (4, 1) => "π",
+        (4, 2) => "EXP",
+        (4, 3) => "c",
         (5, 3) => "AC",
         (5, 6) => "=",
         _ => return None,
     };
-    let color = if (def.drow, def.dcol) == (5, 3)
+    // V key's "c" subscript is red on the reference device.
+    let color = if matches!((def.drow, def.dcol), (5, 3) | (4, 3))
         && matches!(model, MachineModel::Nc1020 | MachineModel::Nc2000)
     {
         0xC0202C
@@ -1285,7 +1411,7 @@ fn sublabel_color(model: MachineModel) -> u32 {
     match model {
         MachineModel::Nc1020 | MachineModel::Nc2000 => 0x2456B0,
         MachineModel::Pc1000 => 0x8ED4D2,
-        MachineModel::Cc800 => 0xD8B45A,
+        MachineModel::Cc800 => 0x6FA8E0,
         MachineModel::Nc3000 => 0x7AC8CE,
     }
 }
@@ -1341,14 +1467,6 @@ impl Canvas {
         });
     }
 
-    fn gradient_rounded_rect_right(&mut self, rect: Rect, radius: usize, top: u32, bottom: u32) {
-        let span = rect.height.max(1).saturating_sub(1);
-        self.paint_rounded_rect_right(rect, radius, |row| {
-            let weight = row.min(span);
-            mix(top, bottom, (span - weight) as u32, weight as u32)
-        });
-    }
-
     fn paint_rounded_rect(&mut self, rect: Rect, radius: usize, color: impl Fn(usize) -> u32) {
         let x1 = (rect.x + rect.width).min(SOURCE_WIDTH);
         let y1 = (rect.y + rect.height).min(SOURCE_HEIGHT);
@@ -1361,32 +1479,6 @@ impl Canvas {
                 } else {
                     x.saturating_sub(rect.x + rect.width - radius - 1)
                 };
-                let dy = if y < rect.y + radius {
-                    rect.y + radius - y
-                } else {
-                    y.saturating_sub(rect.y + rect.height - radius - 1)
-                };
-                if dx == 0 || dy == 0 || dx * dx + dy * dy <= radius * radius {
-                    self.pixels[y * SOURCE_WIDTH + x] = color;
-                }
-            }
-        }
-    }
-
-    fn paint_rounded_rect_right(
-        &mut self,
-        rect: Rect,
-        radius: usize,
-        color: impl Fn(usize) -> u32,
-    ) {
-        let x1 = (rect.x + rect.width).min(SOURCE_WIDTH);
-        let y1 = (rect.y + rect.height).min(SOURCE_HEIGHT);
-        let radius = radius.min(rect.width / 2).min(rect.height / 2);
-        let split_x = rect.x + rect.width / 2;
-        for y in rect.y.min(SOURCE_HEIGHT)..y1 {
-            let color = color(y.saturating_sub(rect.y));
-            for x in split_x.min(SOURCE_WIDTH)..x1 {
-                let dx = x.saturating_sub(rect.x + rect.width - radius - 1);
                 let dy = if y < rect.y + radius {
                     rect.y + radius - y
                 } else {
@@ -1565,21 +1657,6 @@ impl Canvas {
         self.draw_text(
             text,
             center_x as i32 - width / 2,
-            center_y as i32 - (top + bottom) / 2,
-            size,
-            color,
-        );
-    }
-
-    fn text_right(&mut self, text: &str, right_x: i32, center_y: usize, size: u8, color: u32) {
-        let width = text_width(text, size);
-        let Some(top) = ink_top(text, size) else {
-            return;
-        };
-        let bottom = ink_bottom(text, size);
-        self.draw_text(
-            text,
-            right_x - width,
             center_y as i32 - (top + bottom) / 2,
             size,
             color,

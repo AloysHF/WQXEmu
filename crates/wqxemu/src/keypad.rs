@@ -494,6 +494,45 @@ mod tests {
         }
     }
 
+    /// Dump code-skin previews to preview/ for visual comparison.
+    /// Run with: cargo test -p wqxemu dump_code_skin_previews -- --ignored
+    #[test]
+    #[ignore = "writes preview PNGs on demand"]
+    fn dump_code_skin_previews() {
+        use image::{ImageBuffer, Rgb};
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../preview");
+        std::fs::create_dir_all(&dir).unwrap();
+        // Use scale 10 (~1124x1500) so the output is close to the source
+        // canvas resolution and text stays sharp when zoomed in.
+        for model in [
+            MachineModel::Nc1020,
+            MachineModel::Nc2000,
+            MachineModel::Nc3000,
+            MachineModel::Pc1000,
+            MachineModel::Cc800,
+        ] {
+            let skin = DeviceSkin::load(model, 10, SkinMode::Code).unwrap();
+            let lcd = vec![0x0090_A872u32; LCD_WIDTH * LCD_HEIGHT];
+            let pixels = skin.render(&lcd, layout_for(model), &[false; 64]);
+            let mut raw = Vec::with_capacity(pixels.len() * 3);
+            for color in &pixels {
+                raw.push(((color >> 16) & 0xFF) as u8);
+                raw.push(((color >> 8) & 0xFF) as u8);
+                raw.push((color & 0xFF) as u8);
+            }
+            let img: ImageBuffer<Rgb<u8>, Vec<u8>> =
+                ImageBuffer::from_raw(skin.width() as u32, skin.height() as u32, raw).unwrap();
+            let path = dir.join(format!("{}-code.png", model.name().to_lowercase()));
+            img.save(&path).unwrap();
+            eprintln!(
+                "saved {} {}x{}",
+                path.display(),
+                skin.width(),
+                skin.height()
+            );
+        }
+    }
+
     #[test]
     fn nc1020_auxiliary_buttons_have_actions() {
         let skin = DeviceSkin::load(MachineModel::Nc1020, 4, SkinMode::Image).unwrap();
