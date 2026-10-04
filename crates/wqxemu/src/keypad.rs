@@ -365,9 +365,9 @@ fn pc1000_special_region(def: &KeyDef) -> Option<Rect> {
 fn cc800_special_region(def: &KeyDef) -> Option<Rect> {
     match (def.drow, def.dcol) {
         (0, col @ 0..=5) => Some(Rect::centered(202 + col as usize * 136, 809, 104, 58)),
-        (0, 6) => Some(Rect::centered(312, 934, 64, 64)),
-        (1, col @ 2..=5) => Some(Rect::centered(440 + (col as usize - 2) * 103, 934, 62, 62)),
-        (1, 8) => Some(Rect::centered(885, 902, 68, 68)),
+        (0, 6) => Some(Rect::centered(312, 910, 54, 54)),
+        (1, col @ 2..=5) => Some(Rect::centered(440 + (col as usize - 2) * 103, 910, 52, 52)),
+        (1, 8) => Some(Rect::centered(885, 910, 58, 58)),
         _ => None,
     }
 }

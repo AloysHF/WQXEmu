@@ -145,9 +145,10 @@ fn draw_key(canvas: &mut Canvas, model: MachineModel, region: Rect, def: &KeyDef
             "DN" if model != MachineModel::Nc1020 => "+",
             _ => "",
         };
-        // Mark text uses a separate color: dark for "税", blue for M+/M-.
-        let mark_color = match def.label {
-            "PGUP" => 0x2A2E32,
+        // Mark text uses a separate color: dark on light bodies, light on dark keys.
+        let mark_color = match (def.label, model) {
+            ("PGUP", MachineModel::Cc800 | MachineModel::Pc1000 | MachineModel::Nc3000) => 0xF0F0F0,
+            ("PGUP", _) => 0x2A2E32,
             _ => sublabel_color(model),
         };
         // PGUP/PGDN are page-style keys and use double arrowheads;
@@ -192,6 +193,9 @@ fn draw_key(canvas: &mut Canvas, model: MachineModel, region: Rect, def: &KeyDef
             SZ_TEXT
         } else if has_sub && !is_cjk {
             SZ_LOGO
+        } else if def.drow == 0 {
+            // Hotkey row (英汉/名片/...): larger face text to match the reference.
+            SZ_INFO
         } else {
             SZ_KEY
         };
@@ -381,10 +385,17 @@ pub(super) fn draw_styled_button(
         mix(style.face, WHITE, 5, 1),
         mix(style.face, BLACK, 9, 1),
     );
+    // Specular highlight: a thin line across the button face. For round
+    // buttons it sits at the vertical center (matching the device silk);
+    // for rectangular keys it stays near the top edge.
+    let spec_y = match style.shape {
+        ButtonShape::Circle => inset.y + inset.height / 2,
+        _ => inset.y + 2,
+    };
     canvas.rounded_rect(
         Rect {
             x: inset.x + 4,
-            y: inset.y + 2,
+            y: spec_y,
             width: inset.width - 8,
             height: 2,
         },
@@ -625,7 +636,7 @@ fn segment_color(model: MachineModel) -> u32 {
     match model {
         MachineModel::Nc1020 => 0x1A5ECC,
         MachineModel::Pc1000 => 0x6FD1CF,
-        MachineModel::Cc800 => 0x2856B8,
+        MachineModel::Cc800 => 0xE8C040,
         MachineModel::Nc2000 => 0x4048C8,
         MachineModel::Nc3000 => 0x7AC8CE,
     }
@@ -633,7 +644,7 @@ fn segment_color(model: MachineModel) -> u32 {
 
 fn segment_text_color(model: MachineModel) -> u32 {
     match model {
-        MachineModel::Pc1000 | MachineModel::Nc3000 => 0x0F3548,
+        MachineModel::Pc1000 | MachineModel::Nc3000 | MachineModel::Cc800 => 0x1A1A1A,
         _ => 0xFFFFFF,
     }
 }
@@ -692,6 +703,7 @@ fn display_label(model: MachineModel, def: &KeyDef) -> &'static str {
         };
     }
     match (model, def.drow, def.dcol) {
+        (MachineModel::Cc800, 1, 8) => "",
         (MachineModel::Pc1000, 1, 2) => "插入",
         (MachineModel::Pc1000, 1, 3) => "删除",
         (MachineModel::Pc1000, 1, 4) => "查找",
@@ -770,6 +782,7 @@ fn key_superscript(model: MachineModel, def: &KeyDef) -> Option<(&'static str, u
         return match (model, def.dcol) {
             (MachineModel::Nc2000, 2) => Some(("反查CAPS", color)),
             (MachineModel::Nc2000, 3) => Some(("录音", color)),
+            (MachineModel::Cc800, 4) => Some(("继 续", color)),
             (_, 1) => Some(("SHIFT", color)),
             (_, 2) => Some(("CAPS", color)),
             (_, 5) => Some(("−", color)),
@@ -795,9 +808,6 @@ fn key_superscript(model: MachineModel, def: &KeyDef) -> Option<(&'static str, u
         (4, 2) => "° //”",
         _ => return None,
     };
-    if model == MachineModel::Cc800 && (def.drow, def.dcol) == (2, 2) {
-        return None;
-    }
     Some((latin, color))
 }
 
