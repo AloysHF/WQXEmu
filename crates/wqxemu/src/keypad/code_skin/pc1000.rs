@@ -3,8 +3,8 @@
 use wqxemu_core::{KeyDef, MachineModel};
 
 use super::{
-    draw_aux_button, draw_keys, draw_screen_numbers, Canvas, Rect, SZ_KEY, SZ_LOGO, SZ_SMALL,
-    SZ_TAG, SZ_TEXT,
+    draw_aux_button, draw_keys, draw_screen_numbers, Canvas, Rect, SZ_INFO, SZ_KEY, SZ_LOGO,
+    SZ_SMALL, SZ_TAG, SZ_TEXT,
 };
 
 pub(super) fn draw(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
@@ -67,9 +67,9 @@ pub(super) fn draw(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
         );
     }
     // Branding prints directly on the silver lid: embossed brand name and
-    // the teal e1000 logo, matching the reference photo.
+    // the teal PC1000 mark, matching the reference photo.
     canvas.text_centered("文曲星", 200, 588, 34, 0x8A8E92);
-    canvas.text_centered("e1000", 400, 588, SZ_LOGO, 0x0D7A8C);
+    canvas.text_centered("PC1000", 400, 588, SZ_LOGO, 0x0D7A8C);
     canvas.text_centered("真人发音", 838, 494, SZ_KEY, 0x3A3E42);
     canvas.text_centered("Human Intonation", 838, 518, SZ_SMALL, 0x6E7276);
     canvas.text_centered("www.ggv.com.cn", 745, 550, SZ_TEXT, 0x85898D);
@@ -115,7 +115,8 @@ pub(super) fn draw(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
     canvas.rounded_rect(Rect::centered(790, 735, 22, 22), 3, 0xE8E8E8);
     canvas.circle(950, 735, 9, 0xC02020);
 
-    canvas.text_centered("ON/OFF", 344, 739, SZ_TAG, 0x2F5FA8);
+    canvas.text_centered("ON/", 344, 728, SZ_INFO, 0x1A3298);
+    canvas.text_centered("OFF", 344, 754, SZ_INFO, 0x1A3298);
 
     draw_keys(canvas, MachineModel::Pc1000, layout);
 

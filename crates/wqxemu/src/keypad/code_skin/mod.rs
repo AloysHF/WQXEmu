@@ -336,7 +336,7 @@ fn draw_key_captions(canvas: &mut Canvas, model: MachineModel, region: Rect, def
                     region.x + region.width / 2,
                     region.y - 16,
                     SZ_INFO,
-                    0x9FC4E8,
+                    0x1A3298,
                 );
             }
             MachineModel::Cc800 => {
@@ -543,7 +543,7 @@ fn key_style(model: MachineModel, def: &KeyDef) -> ButtonStyle {
         },
         (MachineModel::Pc1000, 1, 8) => ButtonStyle {
             face: 0xF6E0D6,
-            border: 0x9A9DA0,
+            border: 0x1A1C1E,
             text: 0x2F5FA8,
             shape: ButtonShape::Capsule,
         },
@@ -718,6 +718,7 @@ fn display_label(model: MachineModel, def: &KeyDef) -> &'static str {
     match (model, def.drow, def.dcol) {
         (MachineModel::Cc800, 1, 8) => "",
         (MachineModel::Nc2000, 1, 8) => "",
+        (MachineModel::Pc1000, 1, 8) => "",
         (MachineModel::Nc2000, 1, 2..=5) => "",
         (MachineModel::Nc3000, 1, 8) => "",
         (MachineModel::Nc3000, 1, 2..=5) => match def.dcol {
@@ -839,6 +840,7 @@ fn key_superscript(model: MachineModel, def: &KeyDef) -> Option<(&'static str, u
 fn superscript_color(model: MachineModel) -> u32 {
     match model {
         MachineModel::Nc3000 | MachineModel::Nc2000 => 0x2A3C78,
+        MachineModel::Pc1000 => 0x1A3298,
         _ => 0xC0202C,
     }
 }
