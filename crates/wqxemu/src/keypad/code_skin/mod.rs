@@ -460,10 +460,10 @@ fn key_style(model: MachineModel, def: &KeyDef) -> ButtonStyle {
             shape: ButtonShape::Rect(8),
         },
         MachineModel::Nc2000 => ButtonStyle {
-            face: 0xD8D9D7,
-            border: 0x6E7276,
+            face: 0xF8F8F8,
+            border: 0x2A2E32,
             text: 0x1B1D1F,
-            shape: ButtonShape::Rect(6),
+            shape: ButtonShape::Rect(3),
         },
         MachineModel::Pc1000 => ButtonStyle {
             face: 0x4A4F58,
@@ -576,28 +576,28 @@ fn key_style(model: MachineModel, def: &KeyDef) -> ButtonStyle {
             shape: ButtonShape::Rect(13),
         },
         (MachineModel::Nc2000, 0, _) => ButtonStyle {
-            face: 0xABC378,
-            border: 0x5E7A34,
-            text: 0x24350E,
-            shape: ButtonShape::Rect(6),
+            face: 0x3A9A78,
+            border: 0x2A2E32,
+            text: 0xF0FFF8,
+            shape: ButtonShape::Rect(3),
         },
         (MachineModel::Nc2000, 1, 2..=5) | (MachineModel::Nc2000, 1, 8) => ButtonStyle {
-            face: 0xE2E4EC,
-            border: 0x6E7694,
+            face: 0xF0F0F0,
+            border: 0x2A2E32,
             text: 0x2A3C78,
-            shape: ButtonShape::Rect(8),
+            shape: ButtonShape::Rect(3),
         },
         (MachineModel::Nc2000, 3, 9) => ButtonStyle {
             face: 0x5FC0C8,
-            border: 0x2E7A82,
+            border: 0x2A2E32,
             text: 0x0F3540,
-            shape: ButtonShape::Rect(6),
+            shape: ButtonShape::Rect(3),
         },
         (MachineModel::Nc2000, 5, 0) => ButtonStyle {
-            face: 0xD8D9D7,
-            border: 0x6E7276,
+            face: 0xF0F0F0,
+            border: 0x2A2E32,
             text: 0xE06010,
-            shape: ButtonShape::Rect(6),
+            shape: ButtonShape::Rect(3),
         },
         (MachineModel::Nc3000, 1, 2..=5) => ButtonStyle {
             face: 0xBEC1C3,
@@ -649,10 +649,9 @@ fn segment_text_color(model: MachineModel) -> u32 {
     }
 }
 
-fn arrow_color(model: MachineModel, label: &str) -> u32 {
+fn arrow_color(model: MachineModel, _label: &str) -> u32 {
     match model {
         MachineModel::Nc1020 => 0xC4202C,
-        MachineModel::Nc2000 if matches!(label, "DN" | "PGDN") => 0x4048C8,
         MachineModel::Nc2000 => 0xF08228,
         _ => 0xE884B4,
     }
@@ -704,6 +703,8 @@ fn display_label(model: MachineModel, def: &KeyDef) -> &'static str {
     }
     match (model, def.drow, def.dcol) {
         (MachineModel::Cc800, 1, 8) => "",
+        (MachineModel::Nc2000, 1, 8) => "",
+        (MachineModel::Nc2000, 1, 2..=5) => "",
         (MachineModel::Pc1000, 1, 2) => "插入",
         (MachineModel::Pc1000, 1, 3) => "删除",
         (MachineModel::Pc1000, 1, 4) => "查找",
@@ -781,7 +782,7 @@ fn key_superscript(model: MachineModel, def: &KeyDef) -> Option<(&'static str, u
     if def.drow == 5 {
         return match (model, def.dcol) {
             (MachineModel::Nc2000, 2) => Some(("反查CAPS", color)),
-            (MachineModel::Nc2000, 3) => Some(("录音", color)),
+            (MachineModel::Nc2000, 4) => Some(("录音", color)),
             (MachineModel::Cc800, 4) => Some(("继 续", color)),
             (_, 1) => Some(("SHIFT", color)),
             (_, 2) => Some(("CAPS", color)),
@@ -813,7 +814,7 @@ fn key_superscript(model: MachineModel, def: &KeyDef) -> Option<(&'static str, u
 
 fn superscript_color(model: MachineModel) -> u32 {
     match model {
-        MachineModel::Nc3000 => 0x2F55B4,
+        MachineModel::Nc3000 | MachineModel::Nc2000 => 0x2A3C78,
         _ => 0xC0202C,
     }
 }

@@ -3,7 +3,8 @@
 use wqxemu_core::{KeyDef, MachineModel};
 
 use super::{
-    draw_aux_button, draw_hinge, draw_keys, draw_screen_numbers, Canvas, Rect, SZ_INFO, SZ_TEXT,
+    draw_aux_button, draw_hinge, draw_keys, draw_screen_numbers, Canvas, Rect, SZ_INFO, SZ_NUM,
+    SZ_TEXT,
 };
 
 pub(super) fn draw(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
@@ -86,13 +87,16 @@ pub(super) fn draw(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
 
     draw_keys(canvas, MachineModel::Nc2000, layout);
 
+    // ON/OFF label above the round power button (text outside, not inside).
+    canvas.text_centered("ON/OFF", 179, 552, SZ_INFO, 0x3A3E42);
+
     draw_aux_button(
         canvas,
         Rect::centered(112, 946, 76, 48),
         0xF68729,
         0x502800,
         "发音",
-        SZ_TEXT,
+        SZ_NUM,
     );
     draw_aux_button(
         canvas,
@@ -100,7 +104,7 @@ pub(super) fn draw(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
         0xF68729,
         0x502800,
         "报时",
-        SZ_TEXT,
+        SZ_NUM,
     );
     canvas.text_centered("RESET", 305, 932, SZ_TEXT, 0x3A3E42);
     canvas.circle(305, 962, 8, 0x2F55B4);
