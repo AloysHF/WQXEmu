@@ -56,28 +56,20 @@ pub(super) fn draw(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
         .into_iter()
         .enumerate()
     {
-        canvas.text_centered(label, 852, y, SZ_TEXT, 0x3A3E42);
+        canvas.text_centered(label, 848, y, SZ_TEXT, 0x3A3E42);
         draw_aux_button(
             canvas,
-            Rect::centered(932, y, 78, 30),
-            0x4A4E52,
-            0x9FC4E8,
+            Rect::centered(936, y, 56, 30),
+            0x2A2E32,
+            0xFFFFFF,
             &format!("F{}", index + 1),
-            SZ_KEY,
+            SZ_TAG,
         );
     }
-    canvas.rounded_rect(
-        Rect {
-            x: 50,
-            y: 588,
-            width: 986,
-            height: 104,
-        },
-        22,
-        0x2A2D30,
-    );
-    canvas.text_centered("文曲星", 240, 640, 34, 0xF2F2F0);
-    canvas.text_centered("e1000", 430, 640, SZ_LOGO, 0x3E9BD8);
+    // Branding prints directly on the silver lid: embossed brand name and
+    // the teal e1000 logo, matching the reference photo.
+    canvas.text_centered("文曲星", 200, 588, 34, 0x8A8E92);
+    canvas.text_centered("e1000", 400, 588, SZ_LOGO, 0x0D7A8C);
     canvas.text_centered("真人发音", 838, 494, SZ_KEY, 0x3A3E42);
     canvas.text_centered("Human Intonation", 838, 518, SZ_SMALL, 0x6E7276);
     canvas.text_centered("www.ggv.com.cn", 745, 550, SZ_TEXT, 0x85898D);
@@ -94,9 +86,10 @@ pub(super) fn draw(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
         0xC9CBCD,
     );
 
-    canvas.circle(185, 852, 116, 0x2E3134);
-    canvas.circle(185, 852, 106, 0xC4C6C7);
-    canvas.circle_slats((185, 852), 98, 8, 10, 0x3A3D40);
+    // Speaker: silver ring around a recessed grille of raised metal bars.
+    canvas.circle(185, 852, 118, 0x9A9EA2);
+    canvas.circle(185, 852, 112, 0x2E3134);
+    canvas.circle_grille((185, 852), 106, 10, 6, 0xC8CBCD, 0xF0F2F3, 0x1A1C1E);
 
     canvas.rounded_rect(
         Rect {
@@ -130,7 +123,7 @@ pub(super) fn draw(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
         canvas,
         Rect::centered(380, 933, 82, 50),
         0xF6AE28,
-        0x5E4200,
+        0xFFFFFF,
         "发音",
         SZ_TEXT,
     );
@@ -138,7 +131,7 @@ pub(super) fn draw(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
         canvas,
         Rect::centered(478, 933, 82, 50),
         0xF6AE28,
-        0x5E4200,
+        0xFFFFFF,
         "报时",
         SZ_TEXT,
     );

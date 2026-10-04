@@ -80,7 +80,9 @@ fn draw_key(canvas: &mut Canvas, model: MachineModel, region: Rect, def: &KeyDef
 
     if let Some(number) = numeric_legend(def) {
         let seg_color = segment_color(model);
-        // Colored segment covers the right ~40% of the key face.
+        // Colored segment covers the right ~40% of the key face. The left
+        // edge is flat (a clean split against the dark half) and the right
+        // edge follows the key's rounded corner.
         let seg_width = inset.width * 40 / 100;
         let segment = Rect {
             x: inset.x + inset.width - seg_width,
@@ -91,6 +93,18 @@ fn draw_key(canvas: &mut Canvas, model: MachineModel, region: Rect, def: &KeyDef
         canvas.gradient_rounded_rect(
             segment,
             radius.saturating_sub(2).max(2),
+            mix(seg_color, WHITE, 5, 1),
+            mix(seg_color, BLACK, 8, 1),
+        );
+        // Square off the segment's left edge so the split stays vertical.
+        canvas.gradient_rounded_rect(
+            Rect {
+                x: segment.x,
+                y: segment.y,
+                width: 3,
+                height: segment.height,
+            },
+            0,
             mix(seg_color, WHITE, 5, 1),
             mix(seg_color, BLACK, 8, 1),
         );
@@ -518,14 +532,14 @@ fn key_style(model: MachineModel, def: &KeyDef) -> ButtonStyle {
         (MachineModel::Pc1000, 0, 6) => ButtonStyle {
             face: 0xF6AE28,
             border: 0x8E6208,
-            text: 0x5E4200,
-            shape: ButtonShape::Rect(13),
+            text: 0xFFFFFF,
+            shape: ButtonShape::Capsule,
         },
         (MachineModel::Pc1000, 1, 2..=5) => ButtonStyle {
             face: 0x4A4F58,
             border: 0x14171B,
             text: 0xF2F4F6,
-            shape: ButtonShape::Rect(13),
+            shape: ButtonShape::Capsule,
         },
         (MachineModel::Pc1000, 1, 8) => ButtonStyle {
             face: 0xF6E0D6,
@@ -536,8 +550,8 @@ fn key_style(model: MachineModel, def: &KeyDef) -> ButtonStyle {
         (MachineModel::Pc1000, 3, 9) => ButtonStyle {
             face: 0xFDB930,
             border: 0x8E6208,
-            text: 0x5E4000,
-            shape: ButtonShape::Rect(13),
+            text: 0xFFFFFF,
+            shape: ButtonShape::Capsule,
         },
         (MachineModel::Pc1000, 5, 0) => ButtonStyle {
             face: 0x4A4F58,
@@ -988,35 +1002,66 @@ impl Canvas {
         }
     }
 
-    pub(super) fn circle_slats(
+    /// Speaker grille: dark recessed interior with raised metallic bars.
+    /// Each bar gets a bright top highlight and a shaded bottom edge so the
+    /// grille reads as stamped metal like the reference device.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn circle_grille(
         &mut self,
         center: (usize, usize),
         radius: usize,
-        slat_height: usize,
+        bar_height: usize,
         gap: usize,
-        color: u32,
+        bar: u32,
+        highlight: u32,
+        shade: u32,
     ) {
+        self.circle(center.0, center.1, radius, shade);
         let mut y = center.1.saturating_sub(radius) + gap;
-        while y + slat_height < center.1 + radius {
-            let dy = (center.1 as isize - (y + slat_height / 2) as isize).unsigned_abs();
+        while y + bar_height < center.1 + radius {
+            let dy = (center.1 as isize - (y + bar_height / 2) as isize).unsigned_abs();
             let half_width = if dy >= radius {
                 0
             } else {
                 ((radius * radius - dy * dy) as f64).sqrt() as usize
             };
             if half_width > gap {
+                let x = center.0 - half_width + gap;
+                let width = (half_width - gap) * 2;
+                // Bar face with a bright top edge and a darker underside.
+                // The ends stay nearly square: the circle clips them.
                 self.rounded_rect(
                     Rect {
-                        x: center.0 - half_width + gap,
+                        x,
                         y,
-                        width: (half_width - gap) * 2,
-                        height: slat_height,
+                        width,
+                        height: bar_height,
                     },
-                    slat_height / 2,
-                    color,
+                    3,
+                    bar,
+                );
+                self.rounded_rect(
+                    Rect {
+                        x: x + 1,
+                        y,
+                        width: width.saturating_sub(2),
+                        height: 2,
+                    },
+                    1,
+                    highlight,
+                );
+                self.rounded_rect(
+                    Rect {
+                        x: x + 1,
+                        y: y + bar_height.saturating_sub(2),
+                        width: width.saturating_sub(2),
+                        height: 2,
+                    },
+                    1,
+                    mix(bar, shade, 1, 2),
                 );
             }
-            y += slat_height + gap;
+            y += bar_height + gap;
         }
     }
 
