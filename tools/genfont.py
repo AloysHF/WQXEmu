@@ -1,4 +1,4 @@
-# One-shot generator for crates/wqxemu/src/keypad/font.rs.
+# One-shot generator for crates/wqxemu/src/keypad/code_skin/font.rs.
 # Rasterizes the label character set from system CJK fonts into
 # anti-aliased alpha bitmaps that are embedded as static data so the
 # code skin can print the real device labels without any image asset.
@@ -42,6 +42,7 @@ STRINGS = [
     "符号", "空格", "继续", "报文", "事件", "闹钟", "变焦", "反查", "录音",
     "剑桥", "根查字", "解析", "词库", "学习", "系统", "帮助", "零点", "翻页",
     "查看", "翻译", "双解", "英解", "汉解", "税", "合",
+    "复读", "朗读", "变速", "暂停",
 ]
 LABEL_SIZES = [12, 14, 16, 20, 22, 24, 28, 34, 40, 48, 52, 58, 68, 72]
 BRAND_SIZES = [22, 34, 40, 48, 52, 58, 68, 72]
@@ -119,6 +120,6 @@ rows += ["];", "",
          "        .map(|index| &GLYPHS[index].2)",
          "}",
          ""]
-out = Path(__file__).resolve().parents[1] / "crates/wqxemu/src/keypad/font.rs"
+out = Path(__file__).resolve().parents[1] / "crates/wqxemu/src/keypad/code_skin/font.rs"
 out.write_text("\n".join(rows), encoding="utf-8", newline="\n")
 print(f"wrote {out}: {kept} glyphs, {total} alpha bytes")

@@ -3,8 +3,8 @@
 use wqxemu_core::{KeyDef, MachineModel};
 
 use super::{
-    draw_aux_button, draw_hinge, draw_keys, draw_screen_numbers, Canvas, Rect, SZ_INFO, SZ_SMALL,
-    SZ_TAG, SZ_TEXT,
+    draw_aux_button, draw_hinge, draw_keys, draw_screen_numbers, Canvas, Rect, SZ_INFO, SZ_TAG,
+    SZ_TEXT,
 };
 
 pub(super) fn draw(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
@@ -98,20 +98,32 @@ pub(super) fn draw(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
         );
     }
 
-    canvas.circle(905, 890, 98, 0x8E9296);
-    canvas.circle(905, 890, 92, 0xD5D7D8);
-    canvas.circle(905, 890, 72, 0xBEC1C3);
-    canvas.circle(905, 890, 40, 0x587287);
-    canvas.circle(897, 882, 30, 0x66808F);
-    canvas.triangle(905, 833, 9, (0, -1), 0x4E5256);
-    canvas.triangle(905, 947, 9, (0, 1), 0x4E5256);
-    canvas.triangle(848, 890, 9, (-1, 0), 0x4E5256);
-    canvas.triangle(962, 890, 9, (1, 0), 0x4E5256);
-    canvas.text_centered("查看", 872, 782, SZ_TAG, 0x5A5E62);
-    canvas.text_centered("A·P", 925, 782, SZ_SMALL, 0x5A5E62);
-    canvas.text_centered("翻页", 1022, 890, SZ_TAG, 0x5A5E62);
-    canvas.text_centered("发音", 858, 974, SZ_TAG, 0x5A5E62);
-    canvas.text_centered("翻译", 926, 974, SZ_TAG, 0x5A5E62);
+    // D-pad: beveled metal ring with arrows outside pointing inward, curved
+    // silk-screen labels on the ring band, and the round navigator inside.
+    // Outer bevel, then the flat silver band that carries the labels.
+    canvas.circle(905, 890, 90, 0xE8E8E8);
+    canvas.ring(905, 890, 89, 3, 0x8A8A8A);
+    canvas.ring(905, 890, 86, 6, 0x5A5E62);
+    canvas.ring(905, 890, 80, 6, 0x8E9296);
+    canvas.circle(905, 890, 74, 0xC2C5C7);
+    // Inner bevel leading into the navigator button.
+    canvas.ring(905, 890, 52, 4, 0xB0B3B5);
+    canvas.ring(905, 890, 48, 3, 0x8A8E92);
+    canvas.circle(905, 890, 45, 0xC8CBCD);
+    canvas.circle(905, 890, 41, 0x2A2E32);
+    canvas.circle(905, 890, 37, 0x58718A);
+    canvas.circle(897, 883, 29, 0x74899E);
+    // Arrows outside the ring, pointing inward.
+    canvas.triangle(905, 784, 10, (0, 1), 0x4E5256);
+    canvas.triangle(905, 996, 10, (0, -1), 0x4E5256);
+    canvas.triangle(799, 890, 10, (1, 0), 0x4E5256);
+    canvas.triangle(1011, 890, 10, (-1, 0), 0x4E5256);
+    // Ring band labels. Top and bottom curve along the band; the sides are
+    // rotated like the device silk-screen so the character tops face outward.
+    canvas.text_arc("复读/AB", 905, 890, 61.0, SZ_TEXT, 0x2A2E32, true);
+    canvas.text_arc("发音/暂停", 905, 890, 61.0, SZ_TEXT, 0x2A2E32, false);
+    canvas.text_vertical("朗读", 845, 890, SZ_TEXT, 0x2A2E32, false);
+    canvas.text_vertical("变速", 965, 890, SZ_TEXT, 0x2A2E32, true);
 
     canvas.rounded_rect(Rect::centered(543, 1370, 112, 26), 8, 0x8E9296);
     canvas.rounded_rect(Rect::centered(543, 1370, 72, 14), 5, 0x5A5E62);

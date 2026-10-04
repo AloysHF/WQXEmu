@@ -397,10 +397,10 @@ fn nc2000_special_region(def: &KeyDef) -> Option<Rect> {
 
 fn nc3000_special_region(def: &KeyDef) -> Option<Rect> {
     match (def.drow, def.dcol) {
-        (0, col @ 0..=2) => Some(Rect::centered(518 + col as usize * 111, 897, 80, 54)),
-        (0, col @ 3..=5) => Some(Rect::centered(518 + (col as usize - 3) * 111, 968, 80, 54)),
-        (1, col @ 2..=5) => Some(Rect::centered(518 + (col as usize - 2) * 84, 828, 58, 58)),
-        (1, 8) => Some(Rect::centered(140, 828, 68, 68)),
+        (0, col @ 0..=2) => Some(Rect::centered(518 + col as usize * 111, 897, 72, 46)),
+        (0, col @ 3..=5) => Some(Rect::centered(518 + (col as usize - 3) * 111, 968, 72, 46)),
+        (1, col @ 2..=5) => Some(Rect::centered(518 + (col as usize - 2) * 84, 828, 50, 50)),
+        (1, 8) => Some(Rect::centered(140, 828, 58, 58)),
         _ => None,
     }
 }

@@ -271,7 +271,7 @@ fn draw_key(canvas: &mut Canvas, model: MachineModel, region: Rect, def: &KeyDef
 fn draw_key_captions(canvas: &mut Canvas, model: MachineModel, region: Rect, def: &KeyDef) {
     if let Some((category, color)) = category_label(model, def) {
         let (size, offset) = if model == MachineModel::Nc3000 {
-            (SZ_INFO, 38)
+            (SZ_INFO, 12)
         } else {
             (SZ_INFO, 16)
         };
@@ -705,6 +705,13 @@ fn display_label(model: MachineModel, def: &KeyDef) -> &'static str {
         (MachineModel::Cc800, 1, 8) => "",
         (MachineModel::Nc2000, 1, 8) => "",
         (MachineModel::Nc2000, 1, 2..=5) => "",
+        (MachineModel::Nc3000, 1, 8) => "",
+        (MachineModel::Nc3000, 1, 2..=5) => match def.dcol {
+            2 => "F1",
+            3 => "F2",
+            4 => "F3",
+            _ => "F4",
+        },
         (MachineModel::Pc1000, 1, 2) => "插入",
         (MachineModel::Pc1000, 1, 3) => "删除",
         (MachineModel::Pc1000, 1, 4) => "查找",
@@ -784,6 +791,9 @@ fn key_superscript(model: MachineModel, def: &KeyDef) -> Option<(&'static str, u
             (MachineModel::Nc2000, 2) => Some(("反查CAPS", color)),
             (MachineModel::Nc2000, 4) => Some(("录音", color)),
             (MachineModel::Cc800, 4) => Some(("继 续", color)),
+            (MachineModel::Nc3000, 4) => Some(("双解", color)),
+            (MachineModel::Nc3000, 5) => Some(("英解 −", color)),
+            (MachineModel::Nc3000, 6) => Some(("汉解 √", color)),
             (_, 1) => Some(("SHIFT", color)),
             (_, 2) => Some(("CAPS", color)),
             (_, 5) => Some(("−", color)),
@@ -1160,6 +1170,170 @@ impl Canvas {
                 let background = self.pixels[index];
                 self.pixels[index] = mix(color, background, alpha, 255 - alpha);
             }
+        }
+    }
+
+    /// Draw a glyph rotated 90 degrees so ring side labels match the device
+    /// silk-screen (character tops facing outward). `clockwise` picks the
+    /// rotation direction: true = tops face right, false = tops face left.
+    /// `(x, y)` is the top-left of the rotated glyph's bounding box.
+    fn draw_glyph_rotated(
+        &mut self,
+        glyph: &font::Glyph,
+        x: i32,
+        y: i32,
+        color: u32,
+        clockwise: bool,
+    ) {
+        let width = glyph.width as i32;
+        let height = glyph.height as i32;
+        for row in 0..glyph.height {
+            for column in 0..glyph.width {
+                let alpha = glyph.alpha[row * glyph.width + column] as u32;
+                if alpha == 0 {
+                    continue;
+                }
+                // Original (column, row) maps into a height x width box.
+                let (rotated_x, rotated_y) = if clockwise {
+                    (height - 1 - row as i32, column as i32)
+                } else {
+                    (row as i32, width - 1 - column as i32)
+                };
+                let pixel_x = x + rotated_x;
+                let pixel_y = y + rotated_y;
+                if pixel_x < 0
+                    || pixel_x >= SOURCE_WIDTH as i32
+                    || pixel_y < 0
+                    || pixel_y >= SOURCE_HEIGHT as i32
+                {
+                    continue;
+                }
+                let index = pixel_y as usize * SOURCE_WIDTH + pixel_x as usize;
+                let background = self.pixels[index];
+                self.pixels[index] = mix(color, background, alpha, 255 - alpha);
+            }
+        }
+    }
+
+    /// Draw text with each character rotated 90 degrees and stacked
+    /// vertically, centered on (center_x, center_y). Used for the D-pad
+    /// ring side labels.
+    pub(super) fn text_vertical(
+        &mut self,
+        text: &str,
+        center_x: usize,
+        center_y: usize,
+        size: u8,
+        color: u32,
+        clockwise: bool,
+    ) {
+        let glyphs: Vec<&font::Glyph> = text
+            .chars()
+            .filter_map(|ch| font::glyph(ch, size))
+            .collect();
+        if glyphs.is_empty() {
+            return;
+        }
+        // Each rotated character's vertical extent is its upright advance.
+        let total_height: i32 = glyphs.iter().map(|glyph| glyph.advance).sum();
+        let mut pen_y = center_y as i32 - total_height / 2;
+        for glyph in glyphs {
+            let rotated_width = glyph.height as i32;
+            let rotated_height = glyph.width as i32;
+            let x = center_x as i32 - rotated_width / 2;
+            let y = pen_y + (glyph.advance - rotated_height) / 2;
+            self.draw_glyph_rotated(glyph, x, y, color, clockwise);
+            pen_y += glyph.advance;
+        }
+    }
+
+    /// Draw a glyph rotated around its ink center by `angle` radians
+    /// (clockwise positive in screen coordinates).
+    fn draw_glyph_at_angle(
+        &mut self,
+        glyph: &font::Glyph,
+        center_x: f32,
+        center_y: f32,
+        color: u32,
+        angle: f32,
+    ) {
+        let cos = angle.cos();
+        let sin = angle.sin();
+        let half_width = glyph.width as f32 / 2.0;
+        let half_height = glyph.height as f32 / 2.0;
+        for row in 0..glyph.height {
+            for column in 0..glyph.width {
+                let alpha = glyph.alpha[row * glyph.width + column] as u32;
+                if alpha == 0 {
+                    continue;
+                }
+                let dx = column as f32 - half_width + 0.5;
+                let dy = row as f32 - half_height + 0.5;
+                // Clockwise rotation in screen coordinates (y grows downward).
+                let rotated_x = dx * cos - dy * sin;
+                let rotated_y = dx * sin + dy * cos;
+                let pixel_x = (center_x + rotated_x) as i32;
+                let pixel_y = (center_y + rotated_y) as i32;
+                if pixel_x < 0
+                    || pixel_x >= SOURCE_WIDTH as i32
+                    || pixel_y < 0
+                    || pixel_y >= SOURCE_HEIGHT as i32
+                {
+                    continue;
+                }
+                let index = pixel_y as usize * SOURCE_WIDTH + pixel_x as usize;
+                let background = self.pixels[index];
+                self.pixels[index] = mix(color, background, alpha, 255 - alpha);
+            }
+        }
+    }
+
+    /// Draw text along a circular arc so the silk-screen curves like the
+    /// reference device. Each character's ink center sits on the circle of
+    /// `radius` around (center_x, center_y) and is rotated to follow the
+    /// tangent. `top` selects the upper or lower arc; character tops face
+    /// away from the circle on the top arc and toward it on the bottom arc,
+    /// matching how the printed labels read.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn text_arc(
+        &mut self,
+        text: &str,
+        center_x: usize,
+        center_y: usize,
+        radius: f32,
+        size: u8,
+        color: u32,
+        top: bool,
+    ) {
+        let glyphs: Vec<&font::Glyph> = text
+            .chars()
+            .filter_map(|ch| font::glyph(ch, size))
+            .collect();
+        if glyphs.is_empty() {
+            return;
+        }
+        let total: f32 = glyphs.iter().map(|glyph| glyph.advance as f32).sum();
+        let mut pen = -total / 2.0;
+        for glyph in glyphs {
+            let offset = pen + glyph.advance as f32 / 2.0;
+            // Angular position from the vertical, positive toward the right.
+            let theta = offset / radius;
+            let (sin, cos) = (theta.sin(), theta.cos());
+            let (position_x, position_y, rotation) = if top {
+                (
+                    center_x as f32 + radius * sin,
+                    center_y as f32 - radius * cos,
+                    theta,
+                )
+            } else {
+                (
+                    center_x as f32 + radius * sin,
+                    center_y as f32 + radius * cos,
+                    -theta,
+                )
+            };
+            self.draw_glyph_at_angle(glyph, position_x, position_y, color, rotation);
+            pen += glyph.advance as f32;
         }
     }
 
