@@ -809,6 +809,7 @@ fn key_superscript(model: MachineModel, def: &KeyDef) -> Option<(&'static str, u
             (MachineModel::Nc3000, 4) => Some(("双解", color)),
             (MachineModel::Nc3000, 5) => Some(("英解 −", color)),
             (MachineModel::Nc3000, 6) => Some(("汉解 √", color)),
+            (MachineModel::Pc1000, 4) => Some(("继续", color)),
             (_, 1) => Some(("SHIFT", color)),
             (_, 2) => Some(("CAPS", color)),
             (_, 5) => Some(("−", color)),
@@ -1030,8 +1031,9 @@ impl Canvas {
             if half_width > gap {
                 let x = center.0 - half_width + gap;
                 let width = (half_width - gap) * 2;
-                // Bar face with a bright top edge and a darker underside.
-                // The ends stay nearly square: the circle clips them.
+                // Bar face with a crisp bright top edge and a soft
+                // underside shade. The ends stay nearly square: the
+                // circle clips them.
                 self.rounded_rect(
                     Rect {
                         x,
@@ -1044,9 +1046,9 @@ impl Canvas {
                 );
                 self.rounded_rect(
                     Rect {
-                        x: x + 1,
+                        x,
                         y,
-                        width: width.saturating_sub(2),
+                        width,
                         height: 2,
                     },
                     1,
@@ -1054,13 +1056,13 @@ impl Canvas {
                 );
                 self.rounded_rect(
                     Rect {
-                        x: x + 1,
-                        y: y + bar_height.saturating_sub(2),
-                        width: width.saturating_sub(2),
-                        height: 2,
+                        x,
+                        y: y + bar_height.saturating_sub(1),
+                        width,
+                        height: 1,
                     },
-                    1,
-                    mix(bar, shade, 1, 2),
+                    0,
+                    mix(bar, shade, 1, 1),
                 );
             }
             y += bar_height + gap;

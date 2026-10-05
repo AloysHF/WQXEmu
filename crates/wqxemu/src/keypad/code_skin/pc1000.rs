@@ -87,9 +87,11 @@ pub(super) fn draw(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
     );
 
     // Speaker: silver ring around a recessed grille of raised metal bars.
+    // Bars are thick and nearly square-ended with narrow gaps, matching
+    // the stamped-metal grille on the reference device.
     canvas.circle(185, 852, 118, 0x9A9EA2);
     canvas.circle(185, 852, 112, 0x2E3134);
-    canvas.circle_grille((185, 852), 106, 10, 6, 0xC8CBCD, 0xF0F2F3, 0x1A1C1E);
+    canvas.circle_grille((185, 852), 106, 13, 3, 0xC8CBCD, 0xFFFFFF, 0x1A1C1E);
 
     canvas.rounded_rect(
         Rect {
