@@ -93,6 +93,8 @@ pub(super) fn draw(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
     canvas.circle(185, 852, 112, 0x2E3134);
     canvas.circle_grille((185, 852), 106, 13, 3, 0xC8CBCD, 0xFFFFFF, 0x1A1C1E);
 
+    // Media control bar: silver face with a thin dark edge and black
+    // transport icons matching the reference (play, skip-back, rec/stop).
     canvas.rounded_rect(
         Rect {
             x: 560,
@@ -101,21 +103,29 @@ pub(super) fn draw(canvas: &mut Canvas, screen: Rect, layout: &[KeyDef]) {
             height: 90,
         },
         34,
-        0xB4B6B7,
+        0x8A8E92,
     );
     canvas.rounded_rect(
         Rect {
-            x: 578,
-            y: 700,
-            width: 422,
-            height: 70,
+            x: 564,
+            y: 694,
+            width: 450,
+            height: 82,
         },
         30,
-        0x404346,
+        0xC8CBCD,
     );
-    canvas.triangle(650, 735, 13, (1, 0), 0xE8E8E8);
-    canvas.rounded_rect(Rect::centered(790, 735, 22, 22), 3, 0xE8E8E8);
-    canvas.circle(950, 735, 9, 0xC02020);
+    let ink = 0x1A1C1E;
+    // Play: solid right-pointing triangle.
+    canvas.triangle(650, 735, 15, (1, 0), ink);
+    // Skip-back: a thin stop bar then two left-pointing triangles.
+    canvas.rounded_rect(Rect::centered(748, 735, 5, 28), 0, ink);
+    canvas.triangle(774, 735, 11, (-1, 0), ink);
+    canvas.triangle(800, 735, 11, (-1, 0), ink);
+    // Record / stop: red disc, slash, black square.
+    canvas.circle(918, 735, 11, 0xC02020);
+    canvas.line(942, 750, 958, 720, 3, ink);
+    canvas.rounded_rect(Rect::centered(984, 735, 18, 18), 2, ink);
 
     canvas.text_centered("ON/", 344, 728, SZ_INFO, 0x1A3298);
     canvas.text_centered("OFF", 344, 754, SZ_INFO, 0x1A3298);
