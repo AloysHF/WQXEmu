@@ -1,23 +1,26 @@
 // Device skin and virtual keypad support for the standalone frontend.
 
 use anyhow::{Context, Result};
+use clap::ValueEnum;
 use image::imageops::FilterType;
-use wqxemu_core::{key_id_for, key_ids, KeyDef, MachineModel, LCD_HEIGHT, LCD_WIDTH};
+use wqxemu_core::{key_id_for, key_ids, layout_for, KeyDef, MachineModel, LCD_HEIGHT, LCD_WIDTH};
+
+mod code_skin;
 
 const SOURCE_WIDTH: usize = 1086;
 const SOURCE_HEIGHT: usize = 1448;
 const HEIGHT_PER_SCALE: usize = 150;
 
 #[derive(Clone, Copy, Debug)]
-struct Rect {
-    x: usize,
-    y: usize,
-    width: usize,
-    height: usize,
+pub(super) struct Rect {
+    pub(super) x: usize,
+    pub(super) y: usize,
+    pub(super) width: usize,
+    pub(super) height: usize,
 }
 
 impl Rect {
-    fn centered(x: usize, y: usize, width: usize, height: usize) -> Self {
+    pub(super) fn centered(x: usize, y: usize, width: usize, height: usize) -> Self {
         Self {
             x: x.saturating_sub(width / 2),
             y: y.saturating_sub(height / 2),
@@ -29,6 +32,16 @@ impl Rect {
     fn contains(self, x: usize, y: usize) -> bool {
         x >= self.x && x < self.x + self.width && y >= self.y && y < self.y + self.height
     }
+}
+
+/// Source used to render the standalone device skin.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+pub enum SkinMode {
+    /// Use the embedded photograph-like PNG for the selected model.
+    #[default]
+    Image,
+    /// Draw the complete device with built-in raster primitives.
+    Code,
 }
 
 #[derive(Clone, Copy)]
@@ -55,26 +68,8 @@ pub struct DeviceSkin {
 }
 
 impl DeviceSkin {
-    /// Decode the embedded model image and prepare a desktop-sized skin.
-    pub fn load(model: MachineModel, display_scale: u32) -> Result<Self> {
-        let bytes: &[u8] = match model {
-            MachineModel::Nc1020 => include_bytes!("../../../res/NC1020.png"),
-            MachineModel::Nc2000 => include_bytes!("../../../res/NC2000.png"),
-            MachineModel::Nc3000 => include_bytes!("../../../res/NC3000.png"),
-            MachineModel::Pc1000 => include_bytes!("../../../res/PC1000.png"),
-            MachineModel::Cc800 => include_bytes!("../../../res/CC800.png"),
-        };
-        let image = image::load_from_memory(bytes)
-            .with_context(|| format!("failed to decode the {} device skin", model.name()))?
-            .to_rgba8();
-        anyhow::ensure!(
-            image.width() as usize == SOURCE_WIDTH && image.height() as usize == SOURCE_HEIGHT,
-            "unexpected {} skin size: {}x{}",
-            model.name(),
-            image.width(),
-            image.height()
-        );
-
+    /// Prepare a desktop-sized skin from an image or the code renderer.
+    pub fn load(model: MachineModel, display_scale: u32, mode: SkinMode) -> Result<Self> {
         anyhow::ensure!(
             display_scale > 0,
             "device skin scale must be greater than zero"
@@ -87,24 +82,20 @@ impl DeviceSkin {
             .checked_mul(height)
             .context("device skin width overflow")?
             / SOURCE_HEIGHT;
-        let image =
-            image::imageops::resize(&image, width as u32, height as u32, FilterType::Lanczos3);
-        let mut pixels = Vec::with_capacity(width * height);
-        for pixel in image.pixels() {
-            let [r, g, b, a] = pixel.0;
-            // The source PNG is transparent outside the device outline.
-            // Composite it over the normal light window background.
-            let alpha = a as u32;
-            let blend = |channel: u8| (channel as u32 * alpha + 0xF0 * (255 - alpha) + 127) / 255;
-            pixels.push((blend(r) << 16) | (blend(g) << 8) | blend(b));
-        }
+        let spec = spec_for(model);
+        let pixels = match mode {
+            SkinMode::Image => load_image_skin(model, width, height)?,
+            SkinMode::Code => {
+                code_skin::render(model, width, height, spec.screen, layout_for(model))
+            }
+        };
 
         Ok(Self {
             model,
             width,
             height,
             pixels,
-            spec: spec_for(model),
+            spec,
         })
     }
 
@@ -226,6 +217,39 @@ impl DeviceSkin {
     }
 }
 
+fn load_image_skin(model: MachineModel, width: usize, height: usize) -> Result<Vec<u32>> {
+    let bytes: &[u8] = match model {
+        MachineModel::Nc1020 => include_bytes!("../../../res/NC1020.png"),
+        MachineModel::Nc2000 => include_bytes!("../../../res/NC2000.png"),
+        MachineModel::Nc3000 => include_bytes!("../../../res/NC3000.png"),
+        MachineModel::Pc1000 => include_bytes!("../../../res/PC1000.png"),
+        MachineModel::Cc800 => include_bytes!("../../../res/CC800.png"),
+    };
+    let image = image::load_from_memory(bytes)
+        .with_context(|| format!("failed to decode the {} device skin", model.name()))?
+        .to_rgba8();
+    anyhow::ensure!(
+        image.width() as usize == SOURCE_WIDTH && image.height() as usize == SOURCE_HEIGHT,
+        "unexpected {} skin size: {}x{}",
+        model.name(),
+        image.width(),
+        image.height()
+    );
+
+    let image = image::imageops::resize(&image, width as u32, height as u32, FilterType::Lanczos3);
+    let mut pixels = Vec::with_capacity(width * height);
+    for pixel in image.pixels() {
+        let [r, g, b, a] = pixel.0;
+        // The source PNG is transparent outside the device outline.
+        // Composite it over the normal light window background.
+        let alpha = a as u32;
+        let blend = |channel: u8| (channel as u32 * alpha + 0xF0 * (255 - alpha) + 127) / 255;
+        pixels.push((blend(r) << 16) | (blend(g) << 8) | blend(b));
+    }
+
+    Ok(pixels)
+}
+
 fn spec_for(model: MachineModel) -> SkinSpec {
     match model {
         MachineModel::Pc1000 => SkinSpec {
@@ -281,7 +305,7 @@ fn spec_for(model: MachineModel) -> SkinSpec {
     }
 }
 
-fn key_region(model: MachineModel, def: &KeyDef) -> Option<Rect> {
+pub(super) fn key_region(model: MachineModel, def: &KeyDef) -> Option<Rect> {
     if def.drow >= 2 {
         return keyboard_region(model, def.drow, def.dcol);
     }
@@ -341,9 +365,9 @@ fn pc1000_special_region(def: &KeyDef) -> Option<Rect> {
 fn cc800_special_region(def: &KeyDef) -> Option<Rect> {
     match (def.drow, def.dcol) {
         (0, col @ 0..=5) => Some(Rect::centered(202 + col as usize * 136, 809, 104, 58)),
-        (0, 6) => Some(Rect::centered(312, 934, 64, 64)),
-        (1, col @ 2..=5) => Some(Rect::centered(440 + (col as usize - 2) * 103, 934, 62, 62)),
-        (1, 8) => Some(Rect::centered(885, 902, 68, 68)),
+        (0, 6) => Some(Rect::centered(312, 910, 54, 54)),
+        (1, col @ 2..=5) => Some(Rect::centered(440 + (col as usize - 2) * 103, 910, 52, 52)),
+        (1, 8) => Some(Rect::centered(885, 910, 58, 58)),
         _ => None,
     }
 }
@@ -373,10 +397,10 @@ fn nc2000_special_region(def: &KeyDef) -> Option<Rect> {
 
 fn nc3000_special_region(def: &KeyDef) -> Option<Rect> {
     match (def.drow, def.dcol) {
-        (0, col @ 0..=2) => Some(Rect::centered(518 + col as usize * 111, 897, 80, 54)),
-        (0, col @ 3..=5) => Some(Rect::centered(518 + (col as usize - 3) * 111, 968, 80, 54)),
-        (1, col @ 2..=5) => Some(Rect::centered(518 + (col as usize - 2) * 84, 828, 58, 58)),
-        (1, 8) => Some(Rect::centered(140, 828, 68, 68)),
+        (0, col @ 0..=2) => Some(Rect::centered(518 + col as usize * 111, 897, 72, 46)),
+        (0, col @ 3..=5) => Some(Rect::centered(518 + (col as usize - 3) * 111, 968, 72, 46)),
+        (1, col @ 2..=5) => Some(Rect::centered(518 + (col as usize - 2) * 84, 828, 50, 50)),
+        (1, 8) => Some(Rect::centered(140, 828, 58, 58)),
         _ => None,
     }
 }
@@ -387,7 +411,7 @@ mod tests {
     use wqxemu_core::layout_for;
 
     #[test]
-    fn all_skins_load_at_desktop_size() {
+    fn all_skin_modes_render_every_model_at_desktop_size() {
         for model in [
             MachineModel::Nc1020,
             MachineModel::Nc2000,
@@ -395,9 +419,13 @@ mod tests {
             MachineModel::Pc1000,
             MachineModel::Cc800,
         ] {
-            let skin = DeviceSkin::load(model, 4).unwrap();
-            assert_eq!(skin.width(), 450);
-            assert_eq!(skin.height(), 600);
+            for mode in [SkinMode::Image, SkinMode::Code] {
+                let skin = DeviceSkin::load(model, 4, mode).unwrap();
+                assert_eq!(skin.width(), 450);
+                assert_eq!(skin.height(), 600);
+                assert_eq!(skin.pixels.len(), 450 * 600);
+                assert!(skin.pixels.iter().any(|pixel| *pixel != 0xF0F0F0));
+            }
         }
     }
 
@@ -410,7 +438,7 @@ mod tests {
             MachineModel::Pc1000,
             MachineModel::Cc800,
         ] {
-            let skin = DeviceSkin::load(model, 4).unwrap();
+            let skin = DeviceSkin::load(model, 4, SkinMode::Image).unwrap();
             let layout = layout_for(model);
             for def in layout {
                 let region = key_region(model, def).unwrap_or_else(|| {
@@ -435,21 +463,79 @@ mod tests {
     }
 
     #[test]
-    fn lcd_replaces_the_static_screen_image() {
-        let skin = DeviceSkin::load(MachineModel::Pc1000, 4).unwrap();
+    fn lcd_replaces_the_static_screen_in_both_modes() {
         let lcd = vec![0xFFFF_FFFF; LCD_WIDTH * LCD_HEIGHT];
-        let output = skin.render(&lcd, layout_for(MachineModel::Pc1000), &[false; 64]);
-        let screen_x = skin.scale_x(skin.spec.screen.x + skin.spec.screen.width / 2);
-        let screen_y = skin.scale_y(skin.spec.screen.y + skin.spec.screen.height / 2);
-        assert_eq!(
-            output[screen_y * skin.width() + screen_x],
-            skin.spec.lcd_background
-        );
+        for mode in [SkinMode::Image, SkinMode::Code] {
+            let skin = DeviceSkin::load(MachineModel::Pc1000, 4, mode).unwrap();
+            let output = skin.render(&lcd, layout_for(MachineModel::Pc1000), &[false; 64]);
+            let screen_x = skin.scale_x(skin.spec.screen.x + skin.spec.screen.width / 2);
+            let screen_y = skin.scale_y(skin.spec.screen.y + skin.spec.screen.height / 2);
+            assert_eq!(
+                output[screen_y * skin.width() + screen_x],
+                skin.spec.lcd_background
+            );
+        }
+    }
+
+    #[test]
+    fn pressed_key_feedback_works_in_both_modes() {
+        let model = MachineModel::Nc3000;
+        let layout = layout_for(model);
+        let key = &layout[0];
+        let key_id = key_id_for(model, key.row, key.col);
+        for mode in [SkinMode::Image, SkinMode::Code] {
+            let skin = DeviceSkin::load(model, 2, mode).unwrap();
+            let lcd = vec![0xFFFF_FFFF; LCD_WIDTH * LCD_HEIGHT];
+            let normal = skin.render(&lcd, layout, &[false; 64]);
+            let mut pressed = [false; 64];
+            pressed[key_id as usize] = true;
+            let highlighted = skin.render(&lcd, layout, &pressed);
+            assert_ne!(normal, highlighted);
+        }
+    }
+
+    /// Dump code-skin previews to preview/ for visual comparison.
+    /// Run with: cargo test -p wqxemu dump_code_skin_previews -- --ignored
+    #[test]
+    #[ignore = "writes preview PNGs on demand"]
+    fn dump_code_skin_previews() {
+        use image::{ImageBuffer, Rgb};
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../preview");
+        std::fs::create_dir_all(&dir).unwrap();
+        // Use scale 10 (~1124x1500) so the output is close to the source
+        // canvas resolution and text stays sharp when zoomed in.
+        for model in [
+            MachineModel::Nc1020,
+            MachineModel::Nc2000,
+            MachineModel::Nc3000,
+            MachineModel::Pc1000,
+            MachineModel::Cc800,
+        ] {
+            let skin = DeviceSkin::load(model, 10, SkinMode::Code).unwrap();
+            let lcd = vec![0x0090_A872u32; LCD_WIDTH * LCD_HEIGHT];
+            let pixels = skin.render(&lcd, layout_for(model), &[false; 64]);
+            let mut raw = Vec::with_capacity(pixels.len() * 3);
+            for color in &pixels {
+                raw.push(((color >> 16) & 0xFF) as u8);
+                raw.push(((color >> 8) & 0xFF) as u8);
+                raw.push((color & 0xFF) as u8);
+            }
+            let img: ImageBuffer<Rgb<u8>, Vec<u8>> =
+                ImageBuffer::from_raw(skin.width() as u32, skin.height() as u32, raw).unwrap();
+            let path = dir.join(format!("{}-code.png", model.name().to_lowercase()));
+            img.save(&path).unwrap();
+            eprintln!(
+                "saved {} {}x{}",
+                path.display(),
+                skin.width(),
+                skin.height()
+            );
+        }
     }
 
     #[test]
     fn nc1020_auxiliary_buttons_have_actions() {
-        let skin = DeviceSkin::load(MachineModel::Nc1020, 4).unwrap();
+        let skin = DeviceSkin::load(MachineModel::Nc1020, 4, SkinMode::Image).unwrap();
         let layout = layout_for(MachineModel::Nc1020);
         let point = |source_x, source_y| {
             (

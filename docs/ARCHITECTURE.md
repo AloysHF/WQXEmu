@@ -675,14 +675,15 @@ libretro's compact manual Save State API.
 
 ## Keyboard layouts (`keyboard.rs`)
 
-The frontend embeds the live LCD in the matching model image from
-`res/`. `keyboard.rs` is the single source of truth for the model-specific
-key matrices: each `KeyDef` carries the matrix position (`row << 3 | col`),
-the key-face label and the PC key hint. The desktop frontend (`wqxemu`)
-maps those keys to their positions on the device skin, highlights pressed
-keys, and accepts mouse clicks. `HostKey` and `FrontendInputState` provide the
-shared physical keyboard mapping and merge keyboard, RetroPad, and pointer
-sources before updating the same highlight and emulated matrix state.
+The frontend can embed the live LCD in the matching model image from `res/` or
+draw the full device with the raster primitives in `keypad/code_skin.rs`.
+`keyboard.rs` is the single source of truth for the model-specific key
+matrices: each `KeyDef` carries the matrix position (`row << 3 | col`), the
+key-face label and the PC key hint. Both skin modes share the model-specific
+LCD and key rectangles, so the desktop frontend (`wqxemu`) maps mouse clicks
+and pressed-key highlights identically. `HostKey` and `FrontendInputState`
+provide the shared physical keyboard mapping and merge keyboard, RetroPad, and
+pointer sources before updating the same highlight and emulated matrix state.
 
 ## Adding a new model
 
