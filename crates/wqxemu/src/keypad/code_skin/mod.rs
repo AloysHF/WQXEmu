@@ -79,143 +79,182 @@ fn draw_key(canvas: &mut Canvas, model: MachineModel, region: Rect, def: &KeyDef
     let (inset, radius) = draw_styled_button(canvas, region, style);
 
     if let Some(number) = numeric_legend(def) {
-        let seg_color = segment_color(model);
-        // Colored segment covers the right ~40% of the key face. The left
-        // edge is flat (a clean split against the dark half) and the right
-        // edge follows the key's rounded corner.
-        let seg_width = inset.width * 40 / 100;
-        let segment = Rect {
-            x: inset.x + inset.width - seg_width,
-            y: inset.y + 1,
-            width: seg_width - 1,
-            height: inset.height - 2,
-        };
-        canvas.gradient_rounded_rect(
-            segment,
-            radius.saturating_sub(2).max(2),
-            mix(seg_color, WHITE, 5, 1),
-            mix(seg_color, BLACK, 8, 1),
-        );
-        // Square off the segment's left edge so the split stays vertical.
-        canvas.gradient_rounded_rect(
-            Rect {
-                x: segment.x,
-                y: segment.y,
-                width: 3,
-                height: segment.height,
-            },
-            0,
-            mix(seg_color, WHITE, 5, 1),
-            mix(seg_color, BLACK, 8, 1),
-        );
-        if def.drow != 5 {
-            let letter = def.label.split('/').next().unwrap_or(def.label);
-            canvas.text_centered(
-                letter,
-                region.x + region.width * 25 / 100,
-                region.y + region.height / 2,
-                SZ_LOGO,
-                style.text,
-            );
-        }
-        if def.drow == 5 && def.dcol == 4 {
-            let symbol = if model == MachineModel::Nc3000 {
-                "零点"
-            } else {
-                "符号"
-            };
-            canvas.text_centered(
-                symbol,
-                region.x + 24,
-                region.y + region.height / 2,
-                SZ_TAG,
-                style.text,
-            );
-        }
-        if def.drow == 5 && def.dcol == 5 {
-            // Dot key shows "·" on the left and "•" on the segment.
-            canvas.text_centered(
-                "·",
-                region.x + region.width * 25 / 100,
-                region.y + region.height / 2,
-                SZ_NUM,
-                style.text,
-            );
-        }
+        draw_numeric_key(canvas, model, region, (inset, radius), def, number, style);
+    } else if let Some(direction) = arrow_direction(def.label) {
+        draw_arrow_key(canvas, model, region, def, direction);
+    } else {
+        draw_labeled_key(canvas, model, region, def, style);
+    }
+
+    draw_key_captions(canvas, model, region, def);
+}
+
+/// Draw a split-color numeric key: the legend letter on the dark left
+/// half and the digit on a colored segment covering the right ~40% of
+/// the face. The segment's left edge is flat so the split stays vertical
+/// and its right edge follows the key's rounded corner.
+fn draw_numeric_key(
+    canvas: &mut Canvas,
+    model: MachineModel,
+    region: Rect,
+    (inset, radius): (Rect, usize),
+    def: &KeyDef,
+    number: &str,
+    style: ButtonStyle,
+) {
+    let seg_color = segment_color(model);
+    let seg_width = inset.width * 40 / 100;
+    let segment = Rect {
+        x: inset.x + inset.width - seg_width,
+        y: inset.y + 1,
+        width: seg_width - 1,
+        height: inset.height - 2,
+    };
+    let top = mix(seg_color, WHITE, 5, 1);
+    let bottom = mix(seg_color, BLACK, 8, 1);
+    canvas.gradient_rounded_rect(segment, radius.saturating_sub(2).max(2), top, bottom);
+    canvas.gradient_rounded_rect(
+        Rect {
+            x: segment.x,
+            y: segment.y,
+            width: 3,
+            height: segment.height,
+        },
+        0,
+        top,
+        bottom,
+    );
+    if def.drow != 5 {
+        let letter = def.label.split('/').next().unwrap_or(def.label);
         canvas.text_centered(
-            number,
-            segment.x + segment.width / 2 + 1,
+            letter,
+            region.x + region.width * 25 / 100,
             region.y + region.height / 2,
             SZ_LOGO,
-            segment_text_color(model),
+            style.text,
         );
-    } else if let Some(direction) = arrow_direction(def.label) {
-        let color = arrow_color(model, def.label);
-        let mark = match def.label {
-            "PGUP" => "税",
-            "UP" => "-",
-            "PGDN" => "M-",
-            "RT" => "M+",
-            "DN" if model != MachineModel::Nc1020 => "+",
-            _ => "",
-        };
-        // Mark text uses a separate color: dark on light bodies, light on dark keys.
-        let mark_color = match (def.label, model) {
-            ("PGUP", MachineModel::Cc800 | MachineModel::Pc1000 | MachineModel::Nc3000) => 0xF0F0F0,
-            ("PGUP", _) => 0x2A2E32,
-            _ => sublabel_color(model),
-        };
-        // PGUP/PGDN are page-style keys and use double arrowheads;
-        // the cursor keys (UP/DN/LT/RT) use a single arrowhead.
-        let double = matches!(def.label, "PGUP" | "PGDN");
-        let center_x = region.x + region.width / 2 - if mark.is_empty() { 0 } else { 6 };
-        let center_y = region.y + region.height / 2;
-        if double {
-            let (dx, dy) = direction;
-            canvas.triangle(
-                (center_x as i32 - dx as i32 * 10).max(0) as usize,
-                (center_y as i32 - dy as i32 * 10).max(0) as usize,
-                10,
-                direction,
-                color,
-            );
-            canvas.triangle(
-                (center_x as i32 + dx as i32 * 10).max(0) as usize,
-                (center_y as i32 + dy as i32 * 10).max(0) as usize,
-                10,
-                direction,
-                color,
-            );
+    }
+    if def.drow == 5 && def.dcol == 4 {
+        let symbol = if model == MachineModel::Nc3000 {
+            "零点"
         } else {
-            canvas.triangle(center_x, center_y, 12, direction, color);
-        }
-        if !mark.is_empty() {
-            let size = if mark == "税" { SZ_TAG } else { SZ_SMALL };
-            canvas.text_centered(
-                mark,
-                region.x + region.width / 2 + 16,
-                region.y + region.height / 2 + 8,
-                size,
-                mark_color,
-            );
-        }
+            "符号"
+        };
+        canvas.text_centered(
+            symbol,
+            region.x + 24,
+            region.y + region.height / 2,
+            SZ_TAG,
+            style.text,
+        );
+    }
+    if def.drow == 5 && def.dcol == 5 {
+        // Dot key shows "·" on the left and "•" on the segment.
+        canvas.text_centered(
+            "·",
+            region.x + region.width * 25 / 100,
+            region.y + region.height / 2,
+            SZ_NUM,
+            style.text,
+        );
+    }
+    canvas.text_centered(
+        number,
+        segment.x + segment.width / 2 + 1,
+        region.y + region.height / 2,
+        SZ_LOGO,
+        segment_text_color(model),
+    );
+}
+
+/// Draw a cursor or page arrow key together with the small function mark
+/// printed beside the arrowhead on the device silk-screen.
+fn draw_arrow_key(
+    canvas: &mut Canvas,
+    model: MachineModel,
+    region: Rect,
+    def: &KeyDef,
+    direction: (isize, isize),
+) {
+    let color = arrow_color(model, def.label);
+    let mark = match def.label {
+        "PGUP" => "税",
+        "UP" => "-",
+        "PGDN" => "M-",
+        "RT" => "M+",
+        "DN" if model != MachineModel::Nc1020 => "+",
+        _ => "",
+    };
+    // Mark text uses a separate color: dark on light bodies, light on dark keys.
+    let mark_color = match (def.label, model) {
+        ("PGUP", MachineModel::Cc800 | MachineModel::Pc1000 | MachineModel::Nc3000) => 0xF0F0F0,
+        ("PGUP", _) => 0x2A2E32,
+        _ => sublabel_color(model),
+    };
+    // PGUP/PGDN are page-style keys and use double arrowheads;
+    // the cursor keys (UP/DN/LT/RT) use a single arrowhead.
+    let double = matches!(def.label, "PGUP" | "PGDN");
+    let center_x = region.x + region.width / 2 - if mark.is_empty() { 0 } else { 6 };
+    let center_y = region.y + region.height / 2;
+    if double {
+        let (dx, dy) = direction;
+        canvas.triangle(
+            (center_x as i32 - dx as i32 * 10).max(0) as usize,
+            (center_y as i32 - dy as i32 * 10).max(0) as usize,
+            10,
+            direction,
+            color,
+        );
+        canvas.triangle(
+            (center_x as i32 + dx as i32 * 10).max(0) as usize,
+            (center_y as i32 + dy as i32 * 10).max(0) as usize,
+            10,
+            direction,
+            color,
+        );
     } else {
-        let label = display_label(model, def);
-        let has_sub = key_sublabel(model, def).is_some();
-        let is_cjk = label.chars().any(|ch| ch as u32 > 0x7F);
-        let size = if matches!(def.label, "ON" | "PWR") {
-            SZ_TEXT
-        } else if has_sub && !is_cjk {
-            SZ_LOGO
-        } else if def.drow == 0 {
-            // Hotkey row (英汉/名片/...): larger face text to match the reference.
-            SZ_INFO
-        } else {
-            SZ_KEY
-        };
-        if has_sub && !is_cjk {
-            // Latin two-function key: primary letter on the left,
-            // vertically centered; secondary label at the lower-right.
+        canvas.triangle(center_x, center_y, 12, direction, color);
+    }
+    if !mark.is_empty() {
+        let size = if mark == "税" { SZ_TAG } else { SZ_SMALL };
+        canvas.text_centered(
+            mark,
+            region.x + region.width / 2 + 16,
+            region.y + region.height / 2 + 8,
+            size,
+            mark_color,
+        );
+    }
+}
+
+/// Draw the face label of a standard key. Two-function keys also get a
+/// secondary sublabel at the lower-right, laid out differently for Latin
+/// and CJK legends to match the device silk-screen.
+fn draw_labeled_key(
+    canvas: &mut Canvas,
+    model: MachineModel,
+    region: Rect,
+    def: &KeyDef,
+    style: ButtonStyle,
+) {
+    let label = display_label(model, def);
+    let sublabel = key_sublabel(model, def);
+    let has_sub = sublabel.is_some();
+    let is_cjk = label.chars().any(|ch| ch as u32 > 0x7F);
+    let size = if matches!(def.label, "ON" | "PWR") {
+        SZ_TEXT
+    } else if has_sub && !is_cjk {
+        SZ_LOGO
+    } else if def.drow == 0 {
+        // Hotkey row (英汉/名片/...): larger face text to match the reference.
+        SZ_INFO
+    } else {
+        SZ_KEY
+    };
+    match (has_sub, is_cjk) {
+        // Latin two-function key: primary letter on the left, vertically
+        // centered; secondary label at the lower-right.
+        (true, false) => {
             canvas.text_centered(
                 label,
                 region.x + region.width * 30 / 100,
@@ -223,18 +262,11 @@ fn draw_key(canvas: &mut Canvas, model: MachineModel, region: Rect, def: &KeyDef
                 size,
                 style.text,
             );
-            if let Some((sub, color)) = key_sublabel(model, def) {
-                canvas.text_centered(
-                    sub,
-                    region.x + region.width * 70 / 100,
-                    region.y + region.height * 72 / 100,
-                    SZ_INFO,
-                    color,
-                );
-            }
-        } else if has_sub {
-            // CJK two-function key: centered main label with a
-            // lower-right subscript, matching the device silk-screen.
+            draw_sublabel(canvas, sublabel, region, SZ_INFO);
+        }
+        // CJK two-function key: centered main label with a lower-right
+        // subscript, matching the device silk-screen.
+        (true, true) => {
             canvas.text_centered(
                 label,
                 region.x + region.width / 2,
@@ -242,16 +274,9 @@ fn draw_key(canvas: &mut Canvas, model: MachineModel, region: Rect, def: &KeyDef
                 size,
                 style.text,
             );
-            if let Some((sub, color)) = key_sublabel(model, def) {
-                canvas.text_centered(
-                    sub,
-                    region.x + region.width * 70 / 100,
-                    region.y + region.height * 72 / 100,
-                    SZ_KEY,
-                    color,
-                );
-            }
-        } else {
+            draw_sublabel(canvas, sublabel, region, SZ_KEY);
+        }
+        _ => {
             canvas.text_centered(
                 label,
                 region.x + region.width / 2,
@@ -260,23 +285,38 @@ fn draw_key(canvas: &mut Canvas, model: MachineModel, region: Rect, def: &KeyDef
                 style.text,
             );
         }
-        if def.label == "ENT" {
-            let tail = if model == MachineModel::Cc800 {
-                "MB"
-            } else {
-                "MR"
-            };
-            canvas.text_centered(
-                tail,
-                region.x + region.width * 70 / 100,
-                region.y + region.height * 70 / 100,
-                SZ_INFO,
-                sublabel_color(model),
-            );
-        }
     }
+    if def.label == "ENT" {
+        let tail = if model == MachineModel::Cc800 {
+            "MB"
+        } else {
+            "MR"
+        };
+        canvas.text_centered(
+            tail,
+            region.x + region.width * 70 / 100,
+            region.y + region.height * 70 / 100,
+            SZ_INFO,
+            sublabel_color(model),
+        );
+    }
+}
 
-    draw_key_captions(canvas, model, region, def);
+fn draw_sublabel(
+    canvas: &mut Canvas,
+    sublabel: Option<(&'static str, u32)>,
+    region: Rect,
+    size: u8,
+) {
+    if let Some((sub, color)) = sublabel {
+        canvas.text_centered(
+            sub,
+            region.x + region.width * 70 / 100,
+            region.y + region.height * 72 / 100,
+            size,
+            color,
+        );
+    }
 }
 
 /// Small colored captions printed on the shell beside a key: the category
