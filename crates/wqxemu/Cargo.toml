@@ -16,7 +16,7 @@ log.workspace = true
 env_logger.workspace = true
 clap.workspace = true
 image.workspace = true
-minifb = "0.28"
+minifb = "0.29"
 
 [dev-dependencies]
 tempfile.workspace = true
