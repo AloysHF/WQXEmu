@@ -170,6 +170,16 @@ impl DeviceSkin {
         None
     }
 
+    /// Save the skin bitmap, without the live LCD overlay, as a PNG file.
+    pub fn save_png(&self, path: &str) -> Result<()> {
+        let img = image::ImageBuffer::from_fn(self.width as u32, self.height as u32, |x, y| {
+            let pixel = self.pixels[y as usize * self.width + x as usize];
+            image::Rgb([(pixel >> 16) as u8, (pixel >> 8) as u8, pixel as u8])
+        });
+        img.save(path)?;
+        Ok(())
+    }
+
     fn render_lcd(&self, output: &mut [u32], lcd: &[u32]) {
         debug_assert_eq!(lcd.len(), LCD_WIDTH * LCD_HEIGHT);
         let screen = self.spec.screen;
@@ -409,6 +419,20 @@ fn nc3000_special_region(def: &KeyDef) -> Option<Rect> {
 mod tests {
     use super::*;
     use wqxemu_core::layout_for;
+
+    #[test]
+    fn save_png_writes_the_skin_bitmap_at_skin_size() {
+        let skin = DeviceSkin::load(MachineModel::Nc1020, 1, SkinMode::Code).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("skin.png");
+        skin.save_png(path.to_str().unwrap()).unwrap();
+
+        let img = image::open(&path).unwrap();
+        assert_eq!(
+            (img.width(), img.height()),
+            (skin.width() as u32, skin.height() as u32)
+        );
+    }
 
     #[test]
     fn all_skin_modes_render_every_model_at_desktop_size() {

@@ -83,6 +83,8 @@ wqx-emu [OPTIONS] [COMMAND]
 - `--skin <MODE>` — Device skin renderer (default: `code`)
   - `image` uses the original embedded model image
   - `code` draws the shell, controls, labels, speaker, and keyboard without reading a skin image
+- `--dump-skin <PATH>` — Export the selected skin bitmap to a PNG file and exit
+  - Honors `--model`, `--scale`, and `--skin`; useful for previewing or comparing skins
 - `--fullscreen` — Start in fullscreen mode
 
 For example, start the NC1020 with the original photograph-like image skin:
