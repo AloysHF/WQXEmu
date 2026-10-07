@@ -39,14 +39,14 @@ A Wenquxing (文曲星) electronic dictionary emulator written in Rust, using Lo
 Download the latest binary from the [Releases](https://github.com/AloysHF/WQXEmu/releases) page and run:
 
 ```bash
-wqx-emu --model nc1020 --rom tmp/roms/nc1020/obj_lu.bin --nor tmp/roms/nc1020/nc1020.fls
+wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020
 ```
 
 The original image skin is used by default. Pass `--skin code` to render the
 device entirely with built-in drawing primitives while retaining the same LCD
 placement and clickable key geometry.
 
-Firmware dumps are passed with options named after the storage device: `--rom`, `--nor`, `--nand`, and `--nand0`. The required combination depends on the selected model.
+Point `--rom-dir` at a directory containing the firmware dumps for one device; files are discovered by extension (`.rom`/`.bin` for the system ROM, `.fls`/`.nor` for NOR Flash, `.nand` and `.nand0` for NAND). The required combination depends on the selected model.
 
 | Model | Required firmware | Optional firmware |
 |-------|-------------------|-------------------|
@@ -61,7 +61,8 @@ See the [Standalone Emulator](docs/Standalone-Emulator.md) guide for installatio
 ### RetroArch Mode
 
 Install the core, place the firmware set under RetroArch's `system/WQXEmu/<model>/`
-directory, select the machine in **Core Options**, and use **Start Core**. Firmware
+directory (files are discovered by the same extension rules as `--rom-dir`), select
+the machine in **Core Options**, and use **Start Core**. Firmware
 is system data rather than game content, so the core intentionally does not accept
 files through **Load Content**.
 
@@ -75,7 +76,7 @@ Requires [Rust](https://www.rust-lang.org/tools/install) (stable).
 
 ```bash
 cargo build --release
-cargo run -p wqxemu --release -- --model nc1020 --rom tmp/roms/nc1020/obj_lu.bin --nor tmp/roms/nc1020/nc1020.fls
+cargo run -p wqxemu --release -- --model nc1020 --rom-dir tmp/roms/nc1020
 ```
 
 The binary is produced at `target/release/wqx-emu` (or `wqx-emu.exe` on Windows).

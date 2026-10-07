@@ -385,7 +385,7 @@
                         <div class="qs-step">3</div>
                         <h3 data-i18n="qsStep3Title">运行模拟器</h3>
                         <div class="qs-code">
-                            <code>wqxemu --model nc1020 \<br>&nbsp;&nbsp;--rom obj_lu.bin \<br>&nbsp;&nbsp;--nor nc1020.fls</code>
+                            <code>wqx-emu --model nc1020 \<br>&nbsp;&nbsp;--rom-dir tmp/roms/nc1020</code>
                         </div>
                     </div>
                 </div>
@@ -425,8 +425,7 @@
                             <pre><code>cargo build --release
 cargo run -p wqxemu --release -- \
   --model nc1020 \
-  --rom tmp/roms/nc1020/obj_lu.bin \
-  --nor tmp/roms/nc1020/nc1020.fls</code></pre>
+  --rom-dir tmp/roms/nc1020</code></pre>
                         </div>
                     </div>
                     <div class="build-card">

@@ -48,7 +48,7 @@ WQXEmu is a low-level emulator that boots original hardware firmware. The firmwa
 is system data, not game content, so the core starts without content and does not
 accept ROM, NOR, or NAND files through **Load Content**.
 
-1. Install the required files in RetroArch's system directory using the exact paths below
+1. Install the required files in RetroArch's system directory using the layout below
 2. Select **Load Core → WQXEmu**
 3. Select **Start Core**; the initial default is NC1020
 4. To use another model, open **Quick Menu → Core Options → Machine Model** while the core is running
@@ -59,18 +59,26 @@ closing and starting the core again.
 
 ### Firmware File Requirements
 
-| Model | Required files | Optional files |
-|-------|----------------|----------------|
-| NC1020 | `obj_lu.bin`, `nc1020.fls` | — |
-| PC1000 | `pc1000.rom`, `pc1000.nor` | — |
-| CC800 | `obj.bin`, `cc800.fls` | — |
-| NC2000 | `nc2000.nor`, `nc2000.nand`, `nc2000.nand0` | — |
-| NC3000 | `nc3000.nor`, `nc3000.nand` | `nc3000.nand0` |
+Firmware files are discovered in the selected model's directory by extension
+(case-insensitive), using the same rules as the standalone frontend's
+`--rom-dir` option: `.rom` / `.bin` map to the system ROM, `.fls` / `.nor` to
+NOR Flash, `.nand` to NAND and `.nand0` to the first NAND plane. Any other
+files are ignored, so renamed dumps work as long as they keep a recognized
+extension.
+
+| Model | Required firmware | Optional firmware |
+|-------|-------------------|-------------------|
+| NC1020 | ROM + NOR | — |
+| PC1000 | ROM + NOR | — |
+| CC800 | ROM + NOR | — |
+| NC2000 | NOR + NAND + NAND0 | — |
+| NC3000 | NOR + NAND | NAND0 |
 
 ### Firmware File Placement
 
-The paths and filenames are fixed relative to the system directory configured in
-RetroArch. Only the files for the selected model are required:
+The directories are fixed relative to the system directory configured in
+RetroArch; filenames only matter through their extension. Only the firmware
+for the selected model is required. The conventional dump names are:
 
 ```
 system/
@@ -96,8 +104,8 @@ system/
 
 RetroArch's core information page lists the firmware for all five models. Those
 entries are conditional: a complete set is required only for the model selected in
-Core Options. The core validates the selected set at startup and reports every
-missing path.
+Core Options. The core validates the selected set at startup and reports missing
+or unexpected dumps.
 
 ## Physical Keyboard
 
@@ -186,7 +194,7 @@ Screenshots can be taken through RetroArch:
 
 ### Common Issues
 
-1. **"Missing firmware"** — Verify the exact system-directory paths for the selected model
+1. **"Missing firmware"** — Verify the selected model's directory under the RetroArch system directory contains dumps with a recognized extension (`.rom`/`.bin`, `.fls`/`.nor`, `.nand`, `.nand0`)
 2. **The wrong machine starts** — Change **Core Options → Machine Model**, then restart the core
 3. **"Black screen"** — Check firmware file integrity
 
