@@ -55,8 +55,12 @@ struct Args {
     scale: u32,
 
     /// Device skin source: embedded image or code-drawn graphics
-    #[arg(long, value_enum, default_value_t = SkinMode::Image)]
+    #[arg(long, value_enum, default_value_t = SkinMode::Code)]
     skin: SkinMode,
+
+    /// Export the device skin bitmap to a PNG file and exit
+    #[arg(long = "dump-skin", value_name = "PATH")]
+    dump_skin: Option<String>,
 
     /// Take a screenshot after N frames and exit (saves as PNG)
     #[arg(short = 'S', long = "screenshot", value_name = "PATH")]
@@ -245,6 +249,15 @@ fn main() -> Result<()> {
         None => detect_model(&files),
     };
     log::info!("Selected model: {}", model.name());
+
+    // If skin dump mode, export the skin bitmap and exit without emulating.
+    if let Some(ref path) = args.dump_skin {
+        let skin = DeviceSkin::load(model, args.scale, args.skin)?;
+        skin.save_png(path)?;
+        log::info!("Device skin saved to {}", path);
+        return Ok(());
+    }
+
     files.validate_for_model(model)?;
     validate_state_file_path(args.state_file.as_deref(), &files)?;
 
@@ -423,16 +436,26 @@ mod tests {
     }
 
     #[test]
-    fn skin_mode_defaults_to_image_and_accepts_code() {
+    fn skin_mode_defaults_to_code_and_accepts_image() {
         let default_args = Args::try_parse_from(["wqxemu", "--rom-dir", "roms"]).unwrap();
-        assert_eq!(default_args.skin, SkinMode::Image);
+        assert_eq!(default_args.skin, SkinMode::Code);
 
-        let code_args =
-            Args::try_parse_from(["wqxemu", "--rom-dir", "roms", "--skin", "code"]).unwrap();
-        assert_eq!(code_args.skin, SkinMode::Code);
+        let image_args =
+            Args::try_parse_from(["wqxemu", "--rom-dir", "roms", "--skin", "image"]).unwrap();
+        assert_eq!(image_args.skin, SkinMode::Image);
         assert!(
             Args::try_parse_from(["wqxemu", "--rom-dir", "roms", "--skin", "unknown"]).is_err()
         );
+    }
+
+    #[test]
+    fn dump_skin_takes_an_output_path() {
+        let args = Args::try_parse_from(["wqxemu", "--rom-dir", "roms", "--dump-skin", "skin.png"])
+            .unwrap();
+        assert_eq!(args.dump_skin.as_deref(), Some("skin.png"));
+
+        let default_args = Args::try_parse_from(["wqxemu", "--rom-dir", "roms"]).unwrap();
+        assert!(default_args.dump_skin.is_none());
     }
 
     #[test]

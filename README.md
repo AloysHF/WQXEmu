@@ -42,9 +42,10 @@ Download the latest binary from the [Releases](https://github.com/AloysHF/WQXEmu
 wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020
 ```
 
-The original image skin is used by default. Pass `--skin code` to render the
-device entirely with built-in drawing primitives while retaining the same LCD
-placement and clickable key geometry.
+The code-drawn skin is used by default. Pass `--skin image` to use the
+original model photograph instead, retaining the same LCD placement and
+clickable key geometry. Pass `--dump-skin out.png` to export the selected
+skin bitmap to a PNG file.
 
 Point `--rom-dir` at a directory containing the firmware dumps for one device; files are discovered by extension (`.rom`/`.bin` for the system ROM, `.fls`/`.nor` for NOR Flash, `.nand` and `.nand0` for NAND). The required combination depends on the selected model.
 

@@ -2,10 +2,10 @@
 
 use anyhow::{Context, Result};
 use clap::ValueEnum;
-use image::imageops::FilterType;
 use wqxemu_core::{key_id_for, key_ids, layout_for, KeyDef, MachineModel, LCD_HEIGHT, LCD_WIDTH};
 
 mod code_skin;
+mod image_skin;
 
 const SOURCE_WIDTH: usize = 1086;
 const SOURCE_HEIGHT: usize = 1448;
@@ -38,9 +38,9 @@ impl Rect {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
 pub enum SkinMode {
     /// Use the embedded photograph-like PNG for the selected model.
-    #[default]
     Image,
     /// Draw the complete device with built-in raster primitives.
+    #[default]
     Code,
 }
 
@@ -84,7 +84,7 @@ impl DeviceSkin {
             / SOURCE_HEIGHT;
         let spec = spec_for(model);
         let pixels = match mode {
-            SkinMode::Image => load_image_skin(model, width, height)?,
+            SkinMode::Image => image_skin::render(model, width, height)?,
             SkinMode::Code => {
                 code_skin::render(model, width, height, spec.screen, layout_for(model))
             }
@@ -170,6 +170,16 @@ impl DeviceSkin {
         None
     }
 
+    /// Save the skin bitmap, without the live LCD overlay, as a PNG file.
+    pub fn save_png(&self, path: &str) -> Result<()> {
+        let img = image::ImageBuffer::from_fn(self.width as u32, self.height as u32, |x, y| {
+            let pixel = self.pixels[y as usize * self.width + x as usize];
+            image::Rgb([(pixel >> 16) as u8, (pixel >> 8) as u8, pixel as u8])
+        });
+        img.save(path)?;
+        Ok(())
+    }
+
     fn render_lcd(&self, output: &mut [u32], lcd: &[u32]) {
         debug_assert_eq!(lcd.len(), LCD_WIDTH * LCD_HEIGHT);
         let screen = self.spec.screen;
@@ -215,39 +225,6 @@ impl DeviceSkin {
     fn scale_y(&self, y: usize) -> usize {
         y * self.height / SOURCE_HEIGHT
     }
-}
-
-fn load_image_skin(model: MachineModel, width: usize, height: usize) -> Result<Vec<u32>> {
-    let bytes: &[u8] = match model {
-        MachineModel::Nc1020 => include_bytes!("../../../res/NC1020.png"),
-        MachineModel::Nc2000 => include_bytes!("../../../res/NC2000.png"),
-        MachineModel::Nc3000 => include_bytes!("../../../res/NC3000.png"),
-        MachineModel::Pc1000 => include_bytes!("../../../res/PC1000.png"),
-        MachineModel::Cc800 => include_bytes!("../../../res/CC800.png"),
-    };
-    let image = image::load_from_memory(bytes)
-        .with_context(|| format!("failed to decode the {} device skin", model.name()))?
-        .to_rgba8();
-    anyhow::ensure!(
-        image.width() as usize == SOURCE_WIDTH && image.height() as usize == SOURCE_HEIGHT,
-        "unexpected {} skin size: {}x{}",
-        model.name(),
-        image.width(),
-        image.height()
-    );
-
-    let image = image::imageops::resize(&image, width as u32, height as u32, FilterType::Lanczos3);
-    let mut pixels = Vec::with_capacity(width * height);
-    for pixel in image.pixels() {
-        let [r, g, b, a] = pixel.0;
-        // The source PNG is transparent outside the device outline.
-        // Composite it over the normal light window background.
-        let alpha = a as u32;
-        let blend = |channel: u8| (channel as u32 * alpha + 0xF0 * (255 - alpha) + 127) / 255;
-        pixels.push((blend(r) << 16) | (blend(g) << 8) | blend(b));
-    }
-
-    Ok(pixels)
 }
 
 fn spec_for(model: MachineModel) -> SkinSpec {
@@ -409,6 +386,20 @@ fn nc3000_special_region(def: &KeyDef) -> Option<Rect> {
 mod tests {
     use super::*;
     use wqxemu_core::layout_for;
+
+    #[test]
+    fn save_png_writes_the_skin_bitmap_at_skin_size() {
+        let skin = DeviceSkin::load(MachineModel::Nc1020, 1, SkinMode::Code).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("skin.png");
+        skin.save_png(path.to_str().unwrap()).unwrap();
+
+        let img = image::open(&path).unwrap();
+        assert_eq!(
+            (img.width(), img.height()),
+            (skin.width() as u32, skin.height() as u32)
+        );
+    }
 
     #[test]
     fn all_skin_modes_render_every_model_at_desktop_size() {

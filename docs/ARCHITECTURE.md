@@ -675,8 +675,9 @@ libretro's compact manual Save State API.
 
 ## Keyboard layouts (`keyboard.rs`)
 
-The frontend can embed the live LCD in the matching model image from `res/` or
-draw the full device with the raster primitives in `keypad/code_skin.rs`.
+The frontend can embed the live LCD in the matching model image from `res/`
+(one module per model under `keypad/image_skin/`) or draw the full device
+with the raster primitives in `keypad/code_skin/` (one module per model).
 `keyboard.rs` is the single source of truth for the model-specific key
 matrices: each `KeyDef` carries the matrix position (`row << 3 | col`), the
 key-face label and the PC key hint. Both skin modes share the model-specific
