@@ -38,9 +38,9 @@ impl Rect {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
 pub enum SkinMode {
     /// Use the embedded photograph-like PNG for the selected model.
-    #[default]
     Image,
     /// Draw the complete device with built-in raster primitives.
+    #[default]
     Code,
 }
 

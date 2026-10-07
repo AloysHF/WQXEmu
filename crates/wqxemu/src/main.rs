@@ -55,7 +55,7 @@ struct Args {
     scale: u32,
 
     /// Device skin source: embedded image or code-drawn graphics
-    #[arg(long, value_enum, default_value_t = SkinMode::Image)]
+    #[arg(long, value_enum, default_value_t = SkinMode::Code)]
     skin: SkinMode,
 
     /// Take a screenshot after N frames and exit (saves as PNG)
@@ -423,13 +423,13 @@ mod tests {
     }
 
     #[test]
-    fn skin_mode_defaults_to_image_and_accepts_code() {
+    fn skin_mode_defaults_to_code_and_accepts_image() {
         let default_args = Args::try_parse_from(["wqxemu", "--rom-dir", "roms"]).unwrap();
-        assert_eq!(default_args.skin, SkinMode::Image);
+        assert_eq!(default_args.skin, SkinMode::Code);
 
-        let code_args =
-            Args::try_parse_from(["wqxemu", "--rom-dir", "roms", "--skin", "code"]).unwrap();
-        assert_eq!(code_args.skin, SkinMode::Code);
+        let image_args =
+            Args::try_parse_from(["wqxemu", "--rom-dir", "roms", "--skin", "image"]).unwrap();
+        assert_eq!(image_args.skin, SkinMode::Image);
         assert!(
             Args::try_parse_from(["wqxemu", "--rom-dir", "roms", "--skin", "unknown"]).is_err()
         );
