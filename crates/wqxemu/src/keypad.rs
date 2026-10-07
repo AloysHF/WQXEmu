@@ -2,10 +2,10 @@
 
 use anyhow::{Context, Result};
 use clap::ValueEnum;
-use image::imageops::FilterType;
 use wqxemu_core::{key_id_for, key_ids, layout_for, KeyDef, MachineModel, LCD_HEIGHT, LCD_WIDTH};
 
 mod code_skin;
+mod image_skin;
 
 const SOURCE_WIDTH: usize = 1086;
 const SOURCE_HEIGHT: usize = 1448;
@@ -84,7 +84,7 @@ impl DeviceSkin {
             / SOURCE_HEIGHT;
         let spec = spec_for(model);
         let pixels = match mode {
-            SkinMode::Image => load_image_skin(model, width, height)?,
+            SkinMode::Image => image_skin::render(model, width, height)?,
             SkinMode::Code => {
                 code_skin::render(model, width, height, spec.screen, layout_for(model))
             }
@@ -225,39 +225,6 @@ impl DeviceSkin {
     fn scale_y(&self, y: usize) -> usize {
         y * self.height / SOURCE_HEIGHT
     }
-}
-
-fn load_image_skin(model: MachineModel, width: usize, height: usize) -> Result<Vec<u32>> {
-    let bytes: &[u8] = match model {
-        MachineModel::Nc1020 => include_bytes!("../../../res/NC1020.png"),
-        MachineModel::Nc2000 => include_bytes!("../../../res/NC2000.png"),
-        MachineModel::Nc3000 => include_bytes!("../../../res/NC3000.png"),
-        MachineModel::Pc1000 => include_bytes!("../../../res/PC1000.png"),
-        MachineModel::Cc800 => include_bytes!("../../../res/CC800.png"),
-    };
-    let image = image::load_from_memory(bytes)
-        .with_context(|| format!("failed to decode the {} device skin", model.name()))?
-        .to_rgba8();
-    anyhow::ensure!(
-        image.width() as usize == SOURCE_WIDTH && image.height() as usize == SOURCE_HEIGHT,
-        "unexpected {} skin size: {}x{}",
-        model.name(),
-        image.width(),
-        image.height()
-    );
-
-    let image = image::imageops::resize(&image, width as u32, height as u32, FilterType::Lanczos3);
-    let mut pixels = Vec::with_capacity(width * height);
-    for pixel in image.pixels() {
-        let [r, g, b, a] = pixel.0;
-        // The source PNG is transparent outside the device outline.
-        // Composite it over the normal light window background.
-        let alpha = a as u32;
-        let blend = |channel: u8| (channel as u32 * alpha + 0xF0 * (255 - alpha) + 127) / 255;
-        pixels.push((blend(r) << 16) | (blend(g) << 8) | blend(b));
-    }
-
-    Ok(pixels)
 }
 
 fn spec_for(model: MachineModel) -> SkinSpec {
