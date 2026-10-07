@@ -27,7 +27,7 @@ The binary will be at `target/release/wqx-emu` (or `wqx-emu.exe` on Windows).
 ### Basic Usage
 
 ```bash
-wqx-emu --model nc1020 --rom tmp/roms/nc1020/obj_lu.bin --nor tmp/roms/nc1020/nc1020.fls
+wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020
 ```
 
 ### Supported Models
@@ -42,12 +42,16 @@ wqx-emu --model nc1020 --rom tmp/roms/nc1020/obj_lu.bin --nor tmp/roms/nc1020/nc
 
 ### Firmware Files
 
-Firmware dumps are passed with options named after the storage device:
+Point `--rom-dir` at a directory containing the firmware dumps for one device.
+Files are discovered by extension (case-insensitive); any other files are
+ignored:
 
-- `--rom` — System ROM (NC1020, PC1000, CC800)
-- `--nor` — NOR Flash dump
-- `--nand` — NAND Flash dump (NC2000, NC3000)
-- `--nand0` — First NAND plane dump (NC2000, NC3000)
+- `.rom` / `.bin` — System ROM (NC1020, PC1000, CC800)
+- `.fls` / `.nor` — NOR Flash dump
+- `.nand` — NAND Flash dump (NC2000, NC3000)
+- `.nand0` — First NAND plane dump (NC2000, NC3000)
+
+The required combination depends on the selected model (see the table above).
 
 ## Command-Line Options
 
@@ -68,14 +72,9 @@ wqx-emu [OPTIONS] [COMMAND]
 
 ### Firmware Files
 
-- `--rom <PATH>` — Path to system ROM file
-  - Used by: NC1020, PC1000, CC800
-- `--nor <PATH>` — Path to NOR Flash dump
-  - Used by: All models
-- `--nand <PATH>` — Path to NAND Flash dump
-  - Used by: NC2000, NC3000
-- `--nand0 <PATH>` — Path to first NAND plane dump
-  - Used by: NC2000, NC3000
+- `--rom-dir <DIR>` — Directory containing the firmware dumps for one device
+  (required). Files are discovered by extension: `.rom`/`.bin` (system ROM),
+  `.fls`/`.nor` (NOR Flash), `.nand` (NAND Flash), `.nand0` (first NAND plane)
 
 ### Display Options
 
@@ -89,7 +88,7 @@ wqx-emu [OPTIONS] [COMMAND]
 For example, start the NC1020 with the code-drawn skin:
 
 ```bash
-wqx-emu --model nc1020 --rom obj_lu.bin --nor nc1020.fls --skin code
+wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020 --skin code
 ```
 
 Both modes use the same LCD rectangle and clickable key geometry. The image
@@ -151,19 +150,19 @@ Headless mode runs the emulator without a window, useful for testing and batch p
 ### Basic Headless Usage
 
 ```bash
-wqx-emu --model nc1020 --rom tmp/roms/nc1020/obj_lu.bin --nor tmp/roms/nc1020/nc1020.fls --headless --frames 300
+wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020 --headless --frames 300
 ```
 
 ### Taking Screenshots
 
 ```bash
-wqx-emu --model nc1020 --rom tmp/roms/nc1020/obj_lu.bin --nor tmp/roms/nc1020/nc1020.fls --screenshot screenshot.png --frames 300
+wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020 --screenshot screenshot.png --frames 300
 ```
 
 ### Run Headless Without Audio
 
 ```bash
-wqx-emu --model nc1020 --rom tmp/roms/nc1020/obj_lu.bin --nor tmp/roms/nc1020/nc1020.fls --headless --no-audio
+wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020 --headless --no-audio
 ```
 
 ## Persistent Sessions
@@ -173,7 +172,7 @@ The `--state-file` option enables persistent sessions that save and restore emul
 ### First Run
 
 ```bash
-wqx-emu --model nc2000 --nor tmp/roms/nc2000/nc2000.nor --nand tmp/roms/nc2000/nc2000.nand --nand0 tmp/roms/nc2000/nc2000.nand0 --state-file nc2000.wqxs
+wqx-emu --model nc2000 --rom-dir tmp/roms/nc2000 --state-file nc2000.wqxs
 ```
 
 On exit, the emulator saves a compressed session state to `nc2000.wqxs`.
@@ -198,36 +197,36 @@ The emulator restores the saved state without re-running first-boot recovery.
 
 ```bash
 # NC1020 with ROM and NOR
-wqx-emu --model nc1020 --rom tmp/roms/nc1020/obj_lu.bin --nor tmp/roms/nc1020/nc1020.fls
+wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020
 
 # PC1000 with ROM and NOR
-wqx-emu --model pc1000 --rom tmp/roms/pc1000/pc1000.rom --nor tmp/roms/pc1000/pc1000.nor
+wqx-emu --model pc1000 --rom-dir tmp/roms/pc1000
 
 # CC800 with ROM and NOR
-wqx-emu --model cc800 --rom tmp/roms/cc800/obj.bin --nor tmp/roms/cc800/cc800.fls
+wqx-emu --model cc800 --rom-dir tmp/roms/cc800
 
 # NC2000 with NOR, NAND, and NAND0
-wqx-emu --model nc2000 --nor tmp/roms/nc2000/nc2000.nor --nand tmp/roms/nc2000/nc2000.nand --nand0 tmp/roms/nc2000/nc2000.nand0
+wqx-emu --model nc2000 --rom-dir tmp/roms/nc2000
 
 # NC3000 with NOR and NAND
-wqx-emu --model nc3000 --nor tmp/roms/nc3000/nc3000.nor --nand tmp/roms/nc3000/nc3000.nand
+wqx-emu --model nc3000 --rom-dir tmp/roms/nc3000
 ```
 
 ### Display Options
 
 ```bash
 # 2x scale
-wqx-emu --model nc1020 --rom tmp/roms/nc1020/obj_lu.bin --nor tmp/roms/nc1020/nc1020.fls --scale 2
+wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020 --scale 2
 
 # Fullscreen mode
-wqx-emu --model nc1020 --rom tmp/roms/nc1020/obj_lu.bin --nor tmp/roms/nc1020/nc1020.fls --fullscreen
+wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020 --fullscreen
 ```
 
 ### State Management
 
 ```bash
 # First run with state file
-wqx-emu --model nc2000 --nor tmp/roms/nc2000/nc2000.nor --nand tmp/roms/nc2000/nc2000.nand --nand0 tmp/roms/nc2000/nc2000.nand0 --state-file nc2000.wqxs
+wqx-emu --model nc2000 --rom-dir tmp/roms/nc2000 --state-file nc2000.wqxs
 
 # Subsequent runs (firmware files are not needed)
 wqx-emu --model nc2000 --state-file nc2000.wqxs
@@ -237,16 +236,16 @@ wqx-emu --model nc2000 --state-file nc2000.wqxs
 
 ```bash
 # Enable debug logging
-RUST_LOG=wqxemu=debug wqx-emu --model nc1020 --rom tmp/roms/nc1020/obj_lu.bin --nor tmp/roms/nc1020/nc1020.fls
+RUST_LOG=wqxemu=debug wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020
 
 # Enable CPU tracing
-wqx-emu --model nc1020 --rom tmp/roms/nc1020/obj_lu.bin --nor tmp/roms/nc1020/nc1020.fls --trace-cpu
+wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020 --trace-cpu
 
 # Enable IO tracing
-wqx-emu --model nc1020 --rom tmp/roms/nc1020/obj_lu.bin --nor tmp/roms/nc1020/nc1020.fls --trace-io
+wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020 --trace-io
 
 # Enable bank switching tracing
-wqx-emu --model nc1020 --rom tmp/roms/nc1020/obj_lu.bin --nor tmp/roms/nc1020/nc1020.fls --trace-bank
+wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020 --trace-bank
 ```
 
 ## Environment Variables
@@ -262,7 +261,7 @@ wqx-emu --model nc1020 --rom tmp/roms/nc1020/obj_lu.bin --nor tmp/roms/nc1020/nc
 
 ### Common Issues
 
-1. **"ROM file not found"** — Ensure the firmware file paths are correct
+1. **"Firmware directory not found" / "No firmware dumps found"** — Ensure `--rom-dir` points at the directory holding the dumps
 2. **"Invalid model"** — Check the `--model` parameter
 3. **"State file mismatch"** — Use a state file created with the same model and firmware
 
@@ -271,7 +270,7 @@ wqx-emu --model nc1020 --rom tmp/roms/nc1020/obj_lu.bin --nor tmp/roms/nc1020/nc
 Enable debug logging to see detailed information:
 
 ```bash
-RUST_LOG=wqxemu=debug wqx-emu --model nc1020 --rom tmp/roms/nc1020/obj_lu.bin --nor tmp/roms/nc1020/nc1020.fls
+RUST_LOG=wqxemu=debug wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020
 ```
 
 ### CPU Tracing
@@ -279,7 +278,7 @@ RUST_LOG=wqxemu=debug wqx-emu --model nc1020 --rom tmp/roms/nc1020/obj_lu.bin --
 Trace CPU instructions for debugging:
 
 ```bash
-wqx-emu --model nc1020 --rom tmp/roms/nc1020/obj_lu.bin --nor tmp/roms/nc1020/nc1020.fls --trace-cpu
+wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020 --trace-cpu
 ```
 
 ## Notes

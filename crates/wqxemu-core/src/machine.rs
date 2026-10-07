@@ -6,7 +6,7 @@
 // NAND). The `Machine` trait abstracts those differences so the frontend
 // and the generic `Emulator` shell stay model-agnostic.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -83,6 +83,127 @@ impl RomFiles {
             nand,
             nand0,
         }
+    }
+
+    /// Discover firmware dumps in `dir` by file extension.
+    ///
+    /// Recognized extensions (case-insensitive): `.rom` / `.bin` map to the
+    /// system ROM slot, `.fls` / `.nor` to NOR, `.nand` to NAND and `.nand0`
+    /// to the first NAND plane. Any other entry is ignored. Fails when a
+    /// slot matches more than one file or when nothing is discovered.
+    pub fn from_dir(dir: &Path) -> Result<Self> {
+        anyhow::ensure!(
+            dir.is_dir(),
+            "Firmware directory not found: {}",
+            dir.display()
+        );
+
+        let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
+            .with_context(|| format!("Failed to read directory: {}", dir.display()))?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<std::io::Result<_>>()
+            .with_context(|| format!("Failed to list directory: {}", dir.display()))?;
+        entries.sort();
+
+        let mut roms = Vec::new();
+        let mut nors = Vec::new();
+        let mut nands = Vec::new();
+        let mut nands0 = Vec::new();
+        for path in entries {
+            if !path.is_file() {
+                continue;
+            }
+            let Some(extension) = path.extension().and_then(|ext| ext.to_str()) else {
+                continue;
+            };
+            match extension.to_ascii_lowercase().as_str() {
+                "rom" | "bin" => roms.push(path),
+                "fls" | "nor" => nors.push(path),
+                "nand" => nands.push(path),
+                "nand0" => nands0.push(path),
+                _ => {}
+            }
+        }
+
+        let pick = |slot: &str, mut candidates: Vec<PathBuf>| -> Result<Option<PathBuf>> {
+            match candidates.len() {
+                0 => Ok(None),
+                1 => Ok(candidates.pop()),
+                _ => anyhow::bail!(
+                    "Multiple {} dumps in {}: {}",
+                    slot,
+                    dir.display(),
+                    candidates
+                        .iter()
+                        .map(|path| path.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            }
+        };
+
+        let files = Self {
+            rom: pick("ROM", roms)?,
+            nor: pick("NOR", nors)?,
+            nand: pick("NAND", nands)?,
+            nand0: pick("NAND0", nands0)?,
+        };
+        if files.rom.is_none()
+            && files.nor.is_none()
+            && files.nand.is_none()
+            && files.nand0.is_none()
+        {
+            anyhow::bail!(
+                "No firmware dumps found in {} (expected .rom/.bin, .fls/.nor, .nand or .nand0 files)",
+                dir.display()
+            );
+        }
+        Ok(files)
+    }
+
+    /// Verify that the file set matches `model`'s firmware layout: every
+    /// required slot is present and every slot the model does not use is
+    /// empty.
+    pub fn validate_for_model(&self, model: MachineModel) -> Result<()> {
+        let require = |path: &Option<PathBuf>, what: &str| -> Result<()> {
+            if path.is_none() {
+                anyhow::bail!("{} requires a {} dump", model.name(), what);
+            }
+            Ok(())
+        };
+        let reject = |path: &Option<PathBuf>, what: &str| -> Result<()> {
+            if let Some(path) = path {
+                anyhow::bail!(
+                    "{} does not use a {} dump: {}",
+                    model.name(),
+                    what,
+                    path.display()
+                );
+            }
+            Ok(())
+        };
+
+        match model {
+            MachineModel::Nc1020 | MachineModel::Pc1000 | MachineModel::Cc800 => {
+                require(&self.rom, "system ROM")?;
+                require(&self.nor, "NOR Flash")?;
+                reject(&self.nand, "NAND Flash")?;
+                reject(&self.nand0, "NAND0")?;
+            }
+            MachineModel::Nc2000 => {
+                reject(&self.rom, "system ROM")?;
+                require(&self.nor, "NOR Flash")?;
+                require(&self.nand, "NAND Flash")?;
+                require(&self.nand0, "NAND0")?;
+            }
+            MachineModel::Nc3000 => {
+                reject(&self.rom, "system ROM")?;
+                require(&self.nor, "NOR Flash")?;
+                require(&self.nand, "NAND Flash")?;
+            }
+        }
+
+        Ok(())
     }
 
     /// Calculate a stable identity for the complete source firmware set.
@@ -226,7 +347,8 @@ pub use crate::timer::Timer as SharedTimer;
 
 #[cfg(test)]
 mod tests {
-    use super::RomFiles;
+    use super::{MachineModel, RomFiles};
+    use std::path::PathBuf;
 
     #[test]
     fn firmware_fingerprint_depends_on_slot_and_content() {
@@ -254,5 +376,116 @@ mod tests {
         assert_eq!(rom, same_rom);
         assert_ne!(rom, nor);
         assert_ne!(rom, other_rom);
+    }
+
+    #[test]
+    fn from_dir_maps_extensions_to_firmware_slots() {
+        use std::ffi::OsStr;
+        use std::path::Path;
+
+        let nc1020 = tempfile::tempdir().unwrap();
+        std::fs::write(nc1020.path().join("obj_lu.bin"), b"rom").unwrap();
+        std::fs::write(nc1020.path().join("nc1020.fls"), b"nor").unwrap();
+        std::fs::write(nc1020.path().join("notes.txt"), b"ignored").unwrap();
+        std::fs::create_dir(nc1020.path().join("subdir.fls")).unwrap();
+
+        let files = RomFiles::from_dir(nc1020.path()).unwrap();
+        assert_eq!(
+            files.rom.as_deref().map(Path::file_name),
+            Some(Some(OsStr::new("obj_lu.bin")))
+        );
+        assert_eq!(
+            files.nor.as_deref().map(Path::file_name),
+            Some(Some(OsStr::new("nc1020.fls")))
+        );
+        assert!(files.nand.is_none());
+        assert!(files.nand0.is_none());
+
+        let pc1000 = tempfile::tempdir().unwrap();
+        std::fs::write(pc1000.path().join("PC1000.ROM"), b"rom").unwrap();
+        std::fs::write(pc1000.path().join("pc1000.NOR"), b"nor").unwrap();
+
+        let files = RomFiles::from_dir(pc1000.path()).unwrap();
+        assert_eq!(
+            files.rom.as_deref().map(Path::file_name),
+            Some(Some(OsStr::new("PC1000.ROM")))
+        );
+        assert_eq!(
+            files.nor.as_deref().map(Path::file_name),
+            Some(Some(OsStr::new("pc1000.NOR")))
+        );
+
+        let nc2000 = tempfile::tempdir().unwrap();
+        for name in ["nc2000.nor", "nc2000.nand", "nc2000.nand0"] {
+            std::fs::write(nc2000.path().join(name), b"flash").unwrap();
+        }
+
+        let files = RomFiles::from_dir(nc2000.path()).unwrap();
+        assert!(files.rom.is_none());
+        assert!(files.nor.is_some());
+        assert!(files.nand.is_some());
+        assert!(files.nand0.is_some());
+    }
+
+    #[test]
+    fn from_dir_rejects_ambiguous_and_empty_directories() {
+        let ambiguous = tempfile::tempdir().unwrap();
+        std::fs::write(ambiguous.path().join("first.bin"), b"one").unwrap();
+        std::fs::write(ambiguous.path().join("second.bin"), b"two").unwrap();
+
+        let error = RomFiles::from_dir(ambiguous.path()).unwrap_err();
+        assert!(error.to_string().contains("Multiple ROM dumps"));
+
+        let empty = tempfile::tempdir().unwrap();
+        let error = RomFiles::from_dir(empty.path()).unwrap_err();
+        assert!(error.to_string().contains("No firmware dumps found"));
+
+        let missing = empty.path().join("does-not-exist");
+        assert!(RomFiles::from_dir(&missing).is_err());
+    }
+
+    #[test]
+    fn firmware_sets_are_validated_for_the_selected_model() {
+        let rom_and_nor = RomFiles::new(
+            Some(PathBuf::from("system.bin")),
+            Some(PathBuf::from("flash.nor")),
+            None,
+            None,
+        );
+        assert!(rom_and_nor.validate_for_model(MachineModel::Nc1020).is_ok());
+        assert!(rom_and_nor.validate_for_model(MachineModel::Pc1000).is_ok());
+        assert!(rom_and_nor.validate_for_model(MachineModel::Cc800).is_ok());
+
+        let nc2000 = RomFiles::new(
+            None,
+            Some(PathBuf::from("flash.nor")),
+            Some(PathBuf::from("flash.nand")),
+            Some(PathBuf::from("flash.nand0")),
+        );
+        assert!(nc2000.validate_for_model(MachineModel::Nc2000).is_ok());
+        assert!(nc2000.validate_for_model(MachineModel::Nc3000).is_ok());
+
+        let missing_nand0 = RomFiles::new(
+            None,
+            Some(PathBuf::from("flash.nor")),
+            Some(PathBuf::from("flash.nand")),
+            None,
+        );
+        assert!(missing_nand0
+            .validate_for_model(MachineModel::Nc2000)
+            .is_err());
+        assert!(missing_nand0
+            .validate_for_model(MachineModel::Nc3000)
+            .is_ok());
+
+        let unexpected_rom = RomFiles::new(
+            Some(PathBuf::from("system.bin")),
+            Some(PathBuf::from("flash.nor")),
+            Some(PathBuf::from("flash.nand")),
+            None,
+        );
+        assert!(unexpected_rom
+            .validate_for_model(MachineModel::Nc3000)
+            .is_err());
     }
 }

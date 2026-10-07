@@ -208,52 +208,16 @@ unsafe fn environment(cmd: u32, data: *mut c_void) -> bool {
     ENV_CB.map(|cb| cb(cmd, data)).unwrap_or(false)
 }
 
-fn firmware_files_for_model(system_dir: &Path, model: MachineModel) -> wqxemu_core::RomFiles {
-    let model_dir = system_dir.join("WQXEmu").join(model.name());
-    match model {
-        MachineModel::Nc1020 => wqxemu_core::RomFiles::new(
-            Some(model_dir.join("obj_lu.bin")),
-            Some(model_dir.join("nc1020.fls")),
-            None,
-            None,
-        ),
-        MachineModel::Pc1000 => wqxemu_core::RomFiles::new(
-            Some(model_dir.join("pc1000.rom")),
-            Some(model_dir.join("pc1000.nor")),
-            None,
-            None,
-        ),
-        MachineModel::Cc800 => wqxemu_core::RomFiles::new(
-            Some(model_dir.join("obj.bin")),
-            Some(model_dir.join("cc800.fls")),
-            None,
-            None,
-        ),
-        MachineModel::Nc2000 => wqxemu_core::RomFiles::new(
-            None,
-            Some(model_dir.join("nc2000.nor")),
-            Some(model_dir.join("nc2000.nand")),
-            Some(model_dir.join("nc2000.nand0")),
-        ),
-        MachineModel::Nc3000 => {
-            let nand0 = model_dir.join("nc3000.nand0");
-            wqxemu_core::RomFiles::new(
-                None,
-                Some(model_dir.join("nc3000.nor")),
-                Some(model_dir.join("nc3000.nand")),
-                nand0.is_file().then_some(nand0),
-            )
-        }
-    }
-}
-
-fn missing_required_firmware(files: &wqxemu_core::RomFiles) -> Vec<&Path> {
-    [&files.rom, &files.nor, &files.nand, &files.nand0]
-        .into_iter()
-        .flatten()
-        .map(PathBuf::as_path)
-        .filter(|path| !path.is_file())
-        .collect()
+/// Discover the firmware dumps for `model` under the RetroArch system
+/// directory. Files are recognized by the same extension rules as the
+/// standalone frontend (`--rom-dir`): `.rom`/`.bin` for the system ROM,
+/// `.fls`/`.nor` for NOR Flash, `.nand` for NAND and `.nand0` for the
+/// first NAND plane.
+fn firmware_files_for_model(
+    system_dir: &Path,
+    model: MachineModel,
+) -> anyhow::Result<wqxemu_core::RomFiles> {
+    wqxemu_core::RomFiles::from_dir(&system_dir.join("WQXEmu").join(model.name()))
 }
 
 fn model_from_option(value: &str) -> Option<MachineModel> {
@@ -642,18 +606,18 @@ pub extern "C" fn retro_load_game(info: *const RetroGameInfo) -> bool {
             return false;
         };
         let model = selected_model();
-        let files = firmware_files_for_model(Path::new(system_dir), model);
-        let missing = missing_required_firmware(&files);
-        if !missing.is_empty() {
-            let paths = missing
-                .iter()
-                .map(|path| path.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ");
-            report_error(&format!(
-                "Missing {} firmware in the RetroArch system directory: {paths}",
-                model.name()
-            ));
+        let files = match firmware_files_for_model(Path::new(system_dir), model) {
+            Ok(files) => files,
+            Err(error) => {
+                report_error(&format!(
+                    "Failed to load {} firmware from the RetroArch system directory: {error}",
+                    model.name()
+                ));
+                return false;
+            }
+        };
+        if let Err(error) = files.validate_for_model(model) {
+            report_error(&error.to_string());
             return false;
         }
 
@@ -976,54 +940,64 @@ fn set_core_variables() {
 mod tests {
     use super::*;
     #[test]
-    fn resolves_canonical_system_firmware_for_each_model() {
-        let system_dir = Path::new("system");
-        let cases = [
-            (
-                MachineModel::Nc1020,
-                Some("obj_lu.bin"),
-                "nc1020.fls",
-                None,
-                None,
-            ),
-            (
-                MachineModel::Pc1000,
-                Some("pc1000.rom"),
-                "pc1000.nor",
-                None,
-                None,
-            ),
-            (
-                MachineModel::Cc800,
-                Some("obj.bin"),
-                "cc800.fls",
-                None,
-                None,
-            ),
+    fn discovers_canonical_system_firmware_for_each_model() {
+        let system_dir = tempfile::tempdir().unwrap();
+        let canonical = [
+            (MachineModel::Nc1020, &["obj_lu.bin", "nc1020.fls"][..]),
+            (MachineModel::Pc1000, &["pc1000.rom", "pc1000.nor"][..]),
+            (MachineModel::Cc800, &["obj.bin", "cc800.fls"][..]),
             (
                 MachineModel::Nc2000,
-                None,
-                "nc2000.nor",
-                Some("nc2000.nand"),
-                Some("nc2000.nand0"),
+                &["nc2000.nor", "nc2000.nand", "nc2000.nand0"][..],
             ),
-            (
-                MachineModel::Nc3000,
-                None,
-                "nc3000.nor",
-                Some("nc3000.nand"),
-                None,
-            ),
+            (MachineModel::Nc3000, &["nc3000.nor", "nc3000.nand"][..]),
         ];
-
-        for (model, rom, nor, nand, nand0) in cases {
-            let files = firmware_files_for_model(system_dir, model);
-            let model_dir = system_dir.join("WQXEmu").join(model.name());
-            assert_eq!(files.rom, rom.map(|name| model_dir.join(name)));
-            assert_eq!(files.nor, Some(model_dir.join(nor)));
-            assert_eq!(files.nand, nand.map(|name| model_dir.join(name)));
-            assert_eq!(files.nand0, nand0.map(|name| model_dir.join(name)));
+        for (model, names) in canonical {
+            let model_dir = system_dir.path().join("WQXEmu").join(model.name());
+            std::fs::create_dir_all(&model_dir).unwrap();
+            for name in names {
+                std::fs::write(model_dir.join(name), b"dump").unwrap();
+            }
         }
+
+        for (model, _) in canonical {
+            let files = firmware_files_for_model(system_dir.path(), model).unwrap();
+            let model_dir = system_dir.path().join("WQXEmu").join(model.name());
+            let uses_rom = matches!(
+                model,
+                MachineModel::Nc1020 | MachineModel::Pc1000 | MachineModel::Cc800
+            );
+            let uses_nand = matches!(model, MachineModel::Nc2000 | MachineModel::Nc3000);
+            assert_eq!(files.rom.is_some(), uses_rom, "{}", model.name());
+            assert!(files.nor.is_some(), "{}", model.name());
+            assert_eq!(files.nand.is_some(), uses_nand, "{}", model.name());
+            if model == MachineModel::Nc2000 {
+                assert_eq!(files.nand0, Some(model_dir.join("nc2000.nand0")));
+            } else {
+                assert!(files.nand0.is_none(), "{}", model.name());
+            }
+            files.validate_for_model(model).unwrap();
+        }
+    }
+
+    #[test]
+    fn discovers_renamed_dumps_and_reports_missing_firmware() {
+        let system_dir = tempfile::tempdir().unwrap();
+        let model_dir = system_dir.path().join("WQXEmu").join("nc1020");
+        std::fs::create_dir_all(&model_dir).unwrap();
+        std::fs::write(model_dir.join("custom.rom"), b"dump").unwrap();
+
+        // The NOR dump is missing: discovery succeeds but validation fails.
+        let files = firmware_files_for_model(system_dir.path(), MachineModel::Nc1020).unwrap();
+        assert_eq!(files.rom, Some(model_dir.join("custom.rom")));
+        let error = files.validate_for_model(MachineModel::Nc1020).unwrap_err();
+        assert!(error.to_string().contains("requires a NOR Flash dump"));
+
+        // Any file with a recognized extension is accepted.
+        std::fs::write(model_dir.join("custom.fls"), b"dump").unwrap();
+        let files = firmware_files_for_model(system_dir.path(), MachineModel::Nc1020).unwrap();
+        assert_eq!(files.nor, Some(model_dir.join("custom.fls")));
+        files.validate_for_model(MachineModel::Nc1020).unwrap();
     }
 
     #[test]

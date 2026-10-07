@@ -11,4 +11,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 wqxemu-core.workspace = true
+anyhow.workspace = true
 log.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
