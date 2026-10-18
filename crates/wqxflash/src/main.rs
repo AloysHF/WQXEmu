@@ -11,10 +11,32 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 use wqxemu_core::injection::{
-    block_entries, block_inject, nand_fat_entries, nand_inject, nand_name_to_string,
-    nand_root_entries, NandFsParams, NandInjection,
+    block_entries, block_inject, nand_detect_params, nand_fat_entries, nand_inject,
+    nand_name_to_string, nand_root_entries, NandFsParams, NandInjection,
 };
 use wqxemu_core::{Emulator, MachineModel, RomFiles};
+
+/// Pick the NAND file-system constants for `model`, preferring the ones read
+/// from the dump itself.  Warns when the dump disagrees with the model default:
+/// the dumps shipped by the various simulators are not always what their file
+/// name says.
+fn nand_params_for(model: MachineModel, nand: &[u8]) -> Option<NandFsParams> {
+    let detected = nand_detect_params(nand, 0);
+    if let (Some(d), Some(default)) = (detected, NandFsParams::for_raw(model)) {
+        if d != default {
+            eprintln!(
+                "[warn] this dump uses FAT constants C0 {:02X} / version {:02X}, but {} \
+                 expects C0 {:02X} / version {:02X} — the image may be a different machine",
+                d.fat_sig[1],
+                d.fat_ver[0],
+                model.name(),
+                default.fat_sig[1],
+                default.fat_ver[0],
+            );
+        }
+    }
+    detected.or_else(|| NandFsParams::for_raw(model))
+}
 
 #[derive(Parser)]
 #[command(
@@ -595,7 +617,9 @@ fn main() -> Result<()> {
                     let nand_path = rom_files.nand.context("no NAND dump found in --rom-dir")?;
                     let mut nand = std::fs::read(&nand_path)
                         .with_context(|| format!("cannot read {}", nand_path.display()))?;
-                    let params = NandFsParams::for_raw(model)
+                    // Prefer the constants read from the dump itself: dumps of
+                    // the same model can differ (NC3000-family: C0 7A vs C0 7B).
+                    let params = nand_params_for(model, &nand)
                         .context("model does not use the NC2000/NC3000 NAND layout")?;
                     let info: NandInjection =
                         nand_inject(&mut nand, &params, &stored_name, &data, replace.as_deref())
@@ -680,7 +704,7 @@ fn main() -> Result<()> {
                     let files = RomFiles::from_dir(&rom_dir)?;
                     let nand_path = files.nand.context("no NAND dump found in --rom-dir")?;
                     let raw = std::fs::read(&nand_path)?;
-                    let params = NandFsParams::for_raw(model)
+                    let params = nand_params_for(model, &raw)
                         .context("model does not use the NC2000/NC3000 NAND layout")?;
                     let entries = nand_fat_entries(&raw, &params);
                     println!(

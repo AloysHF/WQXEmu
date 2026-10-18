@@ -581,6 +581,37 @@ mod tests {
     }
 
     #[test]
+    fn nand_detect_params_reads_the_constants_from_a_dump() {
+        // NC3000-family dumps disagree on the signature: NC2000 uses C0 79,
+        // NC3000 C0 7A and some dumps C0 7B / version 05.  Detection
+        // must read them from the image instead of assuming the model default.
+        let mut nand = vec![0xFFu8; 64 * NAND_FULL_PAGE];
+        let params = NandFsParams {
+            plane_offset: 0,
+            fat_first_page: 0,
+            root_dir_page: 31,
+            fat_sig: [0xC0, 0x7B],
+            fat_const: [0x7B, 0x05],
+            fat_ver: [0x05, 0x00],
+        };
+        for slot in 1..=4u16 {
+            write_fat_record(
+                &mut nand,
+                &params,
+                slot,
+                1,
+                100 + slot,
+                nand_flags::APPLICATION,
+            )
+            .unwrap();
+        }
+        let detected = nand_detect_params(&nand, 0).expect("constants detected");
+        assert_eq!(detected.fat_sig, [0xC0, 0x7B]);
+        assert_eq!(detected.fat_const, [0x7B, 0x05]);
+        assert_eq!(detected.fat_ver, [0x05, 0x00]);
+    }
+
+    #[test]
     fn block_inject_adds_and_lists_a_file() {
         let mut nor = blank_nor();
         let payload = vec![0xA9, 0x00, 0x85, 0x40];
@@ -835,6 +866,41 @@ pub const NAND_FULL_PAGE: usize = 528;
 /// check is essential: without it, blank / glyph pages that merely happen to
 /// end in `A8 A8` are mistaken for records (the NC2000 dump otherwise reports
 /// 56 phantom records instead of 28).
+/// Detect the FAT constants from an image instead of assuming a model default.
+///
+/// The signature byte at `[5]` and the "version" byte at `[6]` vary between
+/// dumps: NC2000 uses `C0 79` / `00`, NC3000 `C0 7A` / `08`, and other
+/// other dumps use `C0 7B` / `05`.  Bytes `[8:10]` are
+/// always `[signature_low, version]`, so both can be read off the first record.
+/// Returns `None` when no candidate yields a sane, sequential table.
+pub fn nand_detect_params(nand: &[u8], plane_offset: usize) -> Option<NandFsParams> {
+    for sig in [0x79u8, 0x7A, 0x7B] {
+        let page = plane_offset * NAND_FULL_PAGE;
+        let e = nand.get(page..page + 32)?;
+        if e[4] != 0xC0 || e[5] != sig {
+            continue;
+        }
+        let ver = e[6];
+        let params = NandFsParams {
+            plane_offset,
+            fat_first_page: 0,
+            root_dir_page: 31,
+            fat_sig: [0xC0, sig],
+            fat_const: [sig, ver],
+            fat_ver: [ver, 0],
+        };
+        let entries = nand_fat_entries(nand, &params);
+        // A real table starts at slot 1 and is sequential.
+        let ok = entries.len() >= 2
+            && entries[0].slot == 1
+            && entries.windows(2).all(|w| w[1].slot == w[0].slot + 1);
+        if ok {
+            return Some(params);
+        }
+    }
+    None
+}
+
 pub fn nand_fat_entries(nand: &[u8], params: &NandFsParams) -> Vec<NandFatEntry> {
     nand_fat_scan(
         nand,
@@ -1018,7 +1084,7 @@ pub fn nand_directories(nand: &[u8], min_entries: usize) -> Vec<NandDirEntry> {
 //     appear — and launch — from the device's root file list.
 
 /// Geometry of the NC2000 / NC3000 NAND file system.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NandFsParams {
     /// Pages that precede the main NAND plane in the *in-memory* image (the
     /// `nand0` plane).  The on-disk dump omits them, so this is `0` when
