@@ -285,6 +285,45 @@ pub struct BlockEntry {
 }
 
 /// True when `bank` (a 32 KB slice) starts with a PC1000/CC800 file header.
+/// True when `data` already is a formatted PC1000 / CC800 bank image.
+///
+/// The software collections for these models ship whole NOR bank images: the
+/// file carries the 24-byte `40 00` file header itself (and the payload's
+/// `4C lo hi A5 AA 55` entry magic), sometimes stored half-swapped like the
+/// dumps.  Such a file must be written verbatim — wrapping it in a second
+/// header would corrupt it.
+///
+/// Returns the image in *logical* orientation, or `None` when `data` is a bare
+/// payload that still needs a header.
+pub fn block_bank_image(data: &[u8]) -> Option<Vec<u8>> {
+    if data.is_empty() || !data.len().is_multiple_of(BLOCK_BANK_SIZE) {
+        return None;
+    }
+    if data[0] == 0x40 && data[1] == 0x00 {
+        return Some(data.to_vec());
+    }
+    // Half-swapped: the header sits 16 KB into the first bank.
+    if data.len() >= 0x4000 + 2 && data[0x4000] == 0x40 && data[0x4001] == 0x00 {
+        return Some(block_unswap(data));
+    }
+    None
+}
+
+/// Undo the 16 KB half swap that PC1000 / CC800 dumps use inside every 32 KB
+/// bank (an involution, so it also applies the swap).
+fn block_unswap(data: &[u8]) -> Vec<u8> {
+    let mut out = data.to_vec();
+    for off in (0..data.len()).step_by(BLOCK_BANK_SIZE) {
+        if off + BLOCK_BANK_SIZE > data.len() {
+            break;
+        }
+        let half = BLOCK_BANK_SIZE / 2;
+        out[off + half..off + BLOCK_BANK_SIZE].copy_from_slice(&data[off..off + half]);
+        out[off..off + half].copy_from_slice(&data[off + half..off + BLOCK_BANK_SIZE]);
+    }
+    out
+}
+
 pub fn block_is_header(bank: &[u8]) -> bool {
     bank.len() >= BLOCK_HEADER_SIZE && bank[0] == 0x40 && bank[1] == 0x00
 }
@@ -395,7 +434,13 @@ pub fn block_inject(
     data: &[u8],
     replace: Option<&str>,
 ) -> anyhow::Result<BlockInjection> {
-    let needed = (BLOCK_HEADER_SIZE + data.len()).div_ceil(BLOCK_BANK_SIZE);
+    // A whole bank image already carries its own header, so it is written
+    // verbatim; a bare payload gets one.
+    let image = block_bank_image(data);
+    let needed = match &image {
+        Some(img) => img.len() / BLOCK_BANK_SIZE,
+        None => (BLOCK_HEADER_SIZE + data.len()).div_ceil(BLOCK_BANK_SIZE),
+    };
     let total_banks = nor.len() / BLOCK_BANK_SIZE;
     if needed > BLOCK_BANK_LAST - BLOCK_BANK_FIRST + 1 {
         anyhow::bail!(
@@ -478,12 +523,22 @@ pub fn block_inject(
 
     let base = bank * BLOCK_BANK_SIZE;
     nor[base..base + needed * BLOCK_BANK_SIZE].fill(0xFF);
-    nor[base] = 0x40;
-    nor[base + 1] = 0x00;
-    nor[base + 2..base + 18].copy_from_slice(&block_encode_name(name));
-    // Attribute bytes 18..24 are zero for a plain application / game.
-    nor[base + 18..base + 24].fill(0);
-    nor[base + BLOCK_HEADER_SIZE..base + BLOCK_HEADER_SIZE + data.len()].copy_from_slice(data);
+    match image {
+        Some(mut img) => {
+            // Keep the shipped payload, only normalise the stored name.
+            img[2..18].copy_from_slice(&block_encode_name(name));
+            nor[base..base + img.len()].copy_from_slice(&img);
+        }
+        None => {
+            nor[base] = 0x40;
+            nor[base + 1] = 0x00;
+            nor[base + 2..base + 18].copy_from_slice(&block_encode_name(name));
+            // Attribute bytes 18..24 are zero for a plain application / game.
+            nor[base + 18..base + 24].fill(0);
+            nor[base + BLOCK_HEADER_SIZE..base + BLOCK_HEADER_SIZE + data.len()]
+                .copy_from_slice(data);
+        }
+    }
 
     Ok(BlockInjection {
         bank,
@@ -589,6 +644,7 @@ mod tests {
             root_dir_page: 31,
             fat_sig: [0xC0, 0x79],
             fat_const: [0x79, 0x00],
+            fat_ver: [0x00, 0x00],
         };
 
         // First file -> slot 1, ~3 data pages (1500 bytes).
@@ -693,26 +749,25 @@ mod tests {
         // The NC3000 signature must differ from the NC2000 one.
         assert_eq!(params.fat_sig, [0xC0, 0x7A]);
         assert_eq!(params.fat_const, [0x7A, 0x08]);
+        assert_eq!(params.fat_ver, [0x08, 0x00]);
 
         let before = nand_fat_entries(&nand, &params);
         assert_eq!(before.len(), 94, "NC3000 dump should expose 94 slots");
 
+        // FAT page numbers are 16-bit, so a file has to fit in the first
+        // 65536 pages.  This dump's first plane is completely occupied, so
+        // allocation must refuse with a clear error rather than write a page
+        // number that would silently truncate (e.g. 101857 -> 36321).
         let data = vec![0x42; 1024];
-        let info = nand_inject(&mut nand, &params, "GAME.BIN", &data, None).unwrap();
-        assert_eq!(info.slot, 95);
+        let err = nand_inject(&mut nand, &params, "GAME.BIN", &data, None).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("65536") || msg.contains("16-bit"),
+            "unexpected error: {msg}"
+        );
+        // Nothing may have been written.
         let after = nand_fat_entries(&nand, &params);
-        assert_eq!(after.len(), 95);
-        for b in &before {
-            let a = after.iter().find(|e| e.slot == b.slot).unwrap();
-            assert_eq!(a.blocks, b.blocks);
-            assert_eq!(a.pages, b.pages);
-        }
-        let rec = after.iter().find(|e| e.slot == 95).unwrap();
-        assert_eq!(rec.blocks as usize, info.pages);
-        let root = nand_root_entries(&nand, &params);
-        assert!(root
-            .iter()
-            .any(|e| e.slot == 95 && nand_name_to_string(&e.name) == "GAME.BIN"));
+        assert_eq!(after.len(), 94);
     }
 }
 
@@ -979,6 +1034,9 @@ pub struct NandFsParams {
     /// Two-byte constant written at offset `[8:10]` of every FAT record.
     /// NC2000 uses `79 00`; NC3000 uses `7A 08`.
     pub fat_const: [u8; 2],
+    /// Two-byte constant written at offset `[6:8]` of every FAT record.
+    /// NC2000 uses `00 00`; NC3000 uses `08 00` (two 64 K page planes).
+    pub fat_ver: [u8; 2],
 }
 
 impl NandFsParams {
@@ -991,6 +1049,7 @@ impl NandFsParams {
                 root_dir_page: 31,
                 fat_sig: [0xC0, 0x79],
                 fat_const: [0x79, 0x00],
+                fat_ver: [0x00, 0x00],
             }),
             MachineModel::Nc3000 => Some(NandFsParams {
                 plane_offset: 64,
@@ -998,6 +1057,7 @@ impl NandFsParams {
                 root_dir_page: 31,
                 fat_sig: [0xC0, 0x7A],
                 fat_const: [0x7A, 0x08],
+                fat_ver: [0x08, 0x00],
             }),
             _ => None,
         }
@@ -1060,6 +1120,11 @@ fn nand_reserved_pages(nand: &[u8], params: &NandFsParams) -> std::collections::
 fn nand_find_free_pages(nand: &[u8], params: &NandFsParams, count: usize) -> Option<usize> {
     let reserved = nand_reserved_pages(nand, params);
     let total = nand.len() / NAND_FULL_PAGE;
+    // FAT records store their page numbers as u16, so a file must live below
+    // page 65536 — even though an NC3000 image is twice that size (two 64 K
+    // page planes).  Allocating higher would silently truncate the number.
+    let limit = u16::MAX as usize;
+    let total = total.min(limit + 1);
     // Floor: start scanning just past the highest referenced page.
     let floor = reserved.iter().copied().max().unwrap_or(0);
     let mut run = 0usize;
@@ -1228,6 +1293,14 @@ fn write_fat_record(
     if off + 32 > nand.len() {
         anyhow::bail!("FAT record for slot {slot} is outside the image");
     }
+    // The page span has to be representable in u16; refuse rather than write a
+    // truncated (silently wrong) page number.
+    if start as u32 + blocks as u32 > u16::MAX as u32 {
+        anyhow::bail!(
+            "data pages {start}..{} exceed the 16-bit page numbers of the FAT",
+            start as u32 + blocks as u32 - 1
+        );
+    }
     let e = &mut nand[off..off + 32];
     e.fill(0xFF);
     e[0] = (slot & 0xFF) as u8;
@@ -1236,8 +1309,15 @@ fn write_fat_record(
     e[3] = ((flags >> 8) & 0xFF) as u8;
     e[4] = params.fat_sig[0];
     e[5] = params.fat_sig[1]; // model-specific signature
+    e[6] = params.fat_ver[0];
+    e[7] = params.fat_ver[1]; // model-specific constant (plane count on NC3000)
     e[8] = params.fat_const[0];
     e[9] = params.fat_const[1];
+    // Bytes 10..14 and 16..18 are zero on every real record; a freshly erased
+    // (0xFF) record leaves them set, which does not match the dumps.
+    e[10..14].fill(0);
+    e[16] = 0;
+    e[17] = 0;
     e[14] = (blocks & 0xFF) as u8;
     e[15] = ((blocks >> 8) & 0xFF) as u8;
     let pages = fat_record_pages(start, blocks);
@@ -1333,9 +1413,15 @@ pub fn nand_inject(
         }
     }
 
-    // Allocate a contiguous run of fresh data pages.
-    let start_logical = nand_find_free_pages(nand, params, n_pages)
-        .ok_or_else(|| anyhow::anyhow!("no {n_pages} contiguous blank NAND pages available"))?;
+    // Allocate a contiguous run of fresh data pages.  FAT records address pages
+    // with 16 bits, so only the first 65536 pages (plane 0) are usable; when
+    // that region is full we refuse rather than write a truncated page number.
+    let start_logical = nand_find_free_pages(nand, params, n_pages).ok_or_else(|| {
+        anyhow::anyhow!(
+            "no {n_pages} contiguous blank NAND pages below page 65536; the FAT \
+             stores 16-bit page numbers, so files must fit in the first plane"
+        )
+    })?;
 
     // Write the data pages (512 B each; the last page is padded with 0xFF).
     for i in 0..n_pages {
