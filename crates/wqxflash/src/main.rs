@@ -55,6 +55,27 @@ enum Command {
         #[arg(long)]
         rom_dir: PathBuf,
     },
+    /// Directly add/update a game file in the GFFS directory of a flash image
+    /// (works offline on the NOR dump; no firmware execution needed).
+    Inject {
+        /// Target model (currently nc1020; others use the same GFFS layout).
+        #[arg(long)]
+        model: String,
+        /// Directory containing the firmware dumps (read-only).
+        #[arg(long)]
+        rom_dir: PathBuf,
+        /// Output path for the modified NOR image.
+        #[arg(long)]
+        out: PathBuf,
+        /// Game file to inject (.bin or .bas).
+        file: PathBuf,
+        /// Stored file name (default: the input file name).
+        #[arg(long)]
+        name: Option<String>,
+        /// Entry type header (hex). Default: 0xDFC8 for .bin, 0xFF09 for .bas.
+        #[arg(long)]
+        header: Option<String>,
+    },
     /// Boot, then try each key id and report which ones cause the LCD to draw
     /// (debug helper for discovering the UI navigation keys).
     Keysweep {
@@ -168,6 +189,166 @@ fn save_lcd_png(pixels: &[u32], width: usize, height: usize, path: &str) -> Resu
     Ok(())
 }
 
+/// NC1020 NOR on-disk <-> logical conversion (16KB half-swap per 32KB bank,
+/// an involution so it works for both directions).
+fn nc1020_swap(data: &[u8]) -> Vec<u8> {
+    const BANK: usize = 0x8000;
+    const HALF: usize = 0x4000;
+    let mut out = vec![0u8; data.len()];
+    let n = data.len();
+    let mut off = 0;
+    while off < n {
+        if off + BANK > n {
+            out[off..].copy_from_slice(&data[off..]);
+            break;
+        }
+        let s = &data[off..off + BANK];
+        out[off + HALF..off + BANK].copy_from_slice(&s[..HALF]);
+        out[off..off + HALF].copy_from_slice(&s[HALF..]);
+        off += BANK;
+    }
+    out
+}
+
+/// Return the stored name if `off` holds a valid GFFS directory entry.
+fn gffs_entry_name(nor: &[u8], off: usize) -> Option<String> {
+    if off + 32 > nor.len() {
+        return None;
+    }
+    let e = &nor[off..off + 32];
+    if e[30] != 0xFF || e[31] != 0xFF {
+        return None;
+    }
+    if e[2..18].iter().all(|&b| b == 0xFF) {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&e[2..18]).trim_end().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+/// Plan/execute a direct GFFS injection into a nc1020 logical NOR image.
+fn gffs_inject_nc1020(nor: &mut [u8], name: &str, data: &[u8], header: u16) -> anyhow::Result<()> {
+    const BLOCK: usize = 0x21000;
+    if data.len() > 0xFFFF {
+        anyhow::bail!("file too large for GFFS (max 65535 bytes)");
+    }
+    let len = data.len();
+
+    // Collect used data ranges from all directory blocks so we don't clobber
+    // an existing file's allocation (including its FF padding tail).
+    let mut used: Vec<(usize, usize)> = Vec::new();
+    for blk in [0x21000usize, 0x22000, 0x23000, 0x24000, 0x27000] {
+        let end = (blk + 0x1000).min(nor.len());
+        let mut o = blk;
+        while o + 32 <= end {
+            let e = &nor[o..o + 32];
+            if e[30] == 0xFF && e[31] == 0xFF && !e[2..18].iter().all(|&b| b == 0xFF) {
+                let ln = e[24] as usize | (e[25] as usize) << 8;
+                let st = e[26] as usize | (e[27] as usize) << 8;
+                if st != 0xFFFF && ln != 0xFFFF && ln > 0 {
+                    used.push((st << 8, ln));
+                }
+            }
+            o += 32;
+        }
+    }
+
+    // Find an existing entry with the same name (update) in the app block.
+    let mut existing_slot: Option<(usize, usize, usize)> = None; // (off, start_off, old_len)
+    {
+        let end = (BLOCK + 0x1000).min(nor.len());
+        let mut o = BLOCK;
+        while o + 32 <= end {
+            if let Some(n) = gffs_entry_name(nor, o) {
+                if n.eq_ignore_ascii_case(name.trim()) {
+                    let e = &nor[o..o + 32];
+                    let st = e[26] as usize | (e[27] as usize) << 8;
+                    let ln = e[24] as usize | (e[25] as usize) << 8;
+                    existing_slot = Some((o, st << 8, ln));
+                    break;
+                }
+            }
+            o += 32;
+        }
+    }
+
+    let (slot_off, data_off, start) = if let Some((slot, old_off, old_len)) = existing_slot {
+        if len <= old_len && old_off + len <= nor.len() {
+            // Reuse the existing allocation in place.
+            nor[old_off..old_off + len].copy_from_slice(data);
+            (slot, old_off, (old_off >> 8) as u16)
+        } else {
+            let data_off = find_free_data(nor, len, &used)?;
+            nor[data_off..data_off + len].copy_from_slice(data);
+            (slot, data_off, (data_off >> 8) as u16)
+        }
+    } else {
+        // Allocate a free directory slot (skip +0x000) and free data.
+        let end = (BLOCK + 0x1000).min(nor.len());
+        let mut free_slot = None;
+        let mut o = BLOCK + 0x20;
+        while o + 32 <= end {
+            if nor[o..o + 32].iter().all(|&b| b == 0xFF) {
+                free_slot = Some(o);
+                break;
+            }
+            o += 32;
+        }
+        let slot = free_slot.context("no free GFFS directory slot in block 0x21000")?;
+        let data_off = find_free_data(nor, len, &used)?;
+        nor[data_off..data_off + len].copy_from_slice(data);
+        (slot, data_off, (data_off >> 8) as u16)
+    };
+
+    // Build the 32-byte directory entry.
+    let mut e = [0u8; 32];
+    e[0] = (header & 0xFF) as u8;
+    e[1] = (header >> 8) as u8;
+    let mut nm = [b' '; 16];
+    for (i, &b) in name.as_bytes().iter().take(16).enumerate() {
+        nm[i] = b;
+    }
+    e[2..18].copy_from_slice(&nm);
+    e[18..24].copy_from_slice(&[0x79, 0x00, 0x00, 0xFF, 0xFF, 0xFF]);
+    e[24] = (len & 0xFF) as u8;
+    e[25] = ((len >> 8) & 0xFF) as u8;
+    e[26] = (start & 0xFF) as u8;
+    e[27] = ((start >> 8) & 0xFF) as u8;
+    e[28] = 0x00;
+    e[29] = 0xFF;
+    e[30] = 0xFF;
+    e[31] = 0xFF;
+    nor[slot_off..slot_off + 32].copy_from_slice(&e);
+    log::info!(
+        "GFFS inject: slot=0x{slot_off:05X} data=0x{data_off:05X} len={len} start=0x{start:04X} hdr=0x{header:04X}"
+    );
+    Ok(())
+}
+
+fn find_free_data(nor: &[u8], len: usize, used: &[(usize, usize)]) -> anyhow::Result<usize> {
+    // Start high (above the system program and existing data) to avoid
+    // clobbering the firmware's system-program area (which triggers the
+    // "升级系统程序" recovery screen).
+    let mut off = 0xA0000usize;
+    while off + len <= nor.len() {
+        // Skip the directory/superblock window.
+        if (0x20000..0x29000).contains(&off) {
+            off = 0x29000;
+            continue;
+        }
+        let overlaps = used.iter().any(|&(u, ul)| off < u + ul && u < off + len);
+        if !overlaps && nor[off..off + len].iter().all(|&b| b == 0xFF) {
+            return Ok(off);
+        }
+        off += 0x100;
+    }
+    anyhow::bail!("no free data region of {len} bytes found");
+}
+
 fn main() -> Result<()> {
     env_logger::builder()
         .filter_level(log::LevelFilter::Info)
@@ -234,6 +415,53 @@ fn main() -> Result<()> {
                 }
             }
             println!("Saved modified flash to {}", out.display());
+            Ok(())
+        }
+        Command::Inject {
+            model,
+            rom_dir,
+            out: out_path,
+            file,
+            name,
+            header,
+        } => {
+            let model = resolve_model(&model)?;
+            if model != MachineModel::Nc1020 {
+                bail!(
+                    "direct GFFS injection is currently implemented for nc1020 only (model={})",
+                    model.name()
+                );
+            }
+            guard_outside_rom_dir(&rom_dir, &out_path)?;
+            let rom_files = RomFiles::from_dir(&rom_dir)?;
+            let nor_path = rom_files.nor.context("no NOR dump found in --rom-dir")?;
+            let raw = std::fs::read(&nor_path)
+                .with_context(|| format!("cannot read {}", nor_path.display()))?;
+            // On-disk <-> logical is a 16KB half-swap per 32KB bank (involution).
+            let mut logical = nc1020_swap(&raw);
+
+            let data =
+                std::fs::read(&file).with_context(|| format!("cannot read {}", file.display()))?;
+            let stored_name = name.unwrap_or_else(|| {
+                file.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "GAME.BIN".to_string())
+            });
+            let hdr = match header {
+                Some(h) => u16::from_str_radix(h.trim_start_matches("0x"), 16)
+                    .context("invalid --header")?,
+                None if stored_name.to_ascii_lowercase().ends_with(".bas") => 0xFF09,
+                None => 0xDFC8,
+            };
+            gffs_inject_nc1020(&mut logical, &stored_name, &data, hdr)
+                .with_context(|| format!("inject `{stored_name}` failed"))?;
+            std::fs::write(&out_path, nc1020_swap(&logical))
+                .with_context(|| format!("cannot write {}", out_path.display()))?;
+            println!(
+                "[ok] injected `{stored_name}` ({} bytes, hdr=0x{hdr:04X}) -> {}",
+                data.len(),
+                out_path.display()
+            );
             Ok(())
         }
         Command::Ls { model, rom_dir } => {
