@@ -603,10 +603,19 @@ fn main() -> Result<()> {
                         },
                         out_path.display()
                     );
-                    if !info.replaced {
+                    // Verified on the CC800 firmware: its application list shows
+                    // at most the first five files (lowest banks); a 6th file is
+                    // ignored.  Replacing an existing file keeps it listed.
+                    if model == MachineModel::Cc800 && !info.replaced && info.bank >= 10 {
                         println!(
-                            "     note: the 应用程序 list is built by scanning banks 2..=13, so \
-                             the new entry shows up there."
+                            "     note: the CC800 application list only shows the first five \
+                             files; a file this deep may not be listed.  Consider --replace."
+                        );
+                    }
+                    if !info.replaced && model == MachineModel::Pc1000 {
+                        println!(
+                            "     note: the PC1000 application list is built by scanning banks \
+                             2..=13, so the new entry shows up there (verified end to end)."
                         );
                     }
                 }
