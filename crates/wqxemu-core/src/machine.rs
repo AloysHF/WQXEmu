@@ -12,6 +12,7 @@ use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 
 use crate::cpu::Cpu;
+use crate::injection::GffsEntry;
 use crate::lcd::Lcd;
 use crate::save::SaveState;
 
@@ -315,6 +316,11 @@ pub trait Machine: Send {
         anyhow::bail!("NOR Flash saving is not supported for this model")
     }
 
+    /// Persist NAND Flash contents to disk (models that keep the GFFS in NAND).
+    fn save_nand(&self, _path: &Path) -> Result<()> {
+        anyhow::bail!("NAND Flash saving is not supported for this model")
+    }
+
     /// Enable/disable speed-up mode.
     fn set_speed_up(&mut self, _speed_up: bool) {}
 
@@ -333,6 +339,39 @@ pub trait Machine: Send {
     /// Identify immutable firmware that is intentionally omitted from sessions.
     fn persistent_state_identity(&self) -> u64 {
         0
+    }
+
+    /// Write a byte directly to RAM / IO registers without triggering IO side
+    /// effects. Used by the GFFS flash-injection pump to stage its parameters,
+    /// the file name and the pump routine itself before diverting the CPU.
+    fn poke(&mut self, _addr: u16, _val: u8) {}
+
+    /// Arm the firmware-driven injection pump with the bytes of the file to be
+    /// written. Default implementation does nothing (model not supported).
+    fn inject_activate(&mut self, _data: Vec<u8>) {}
+
+    /// Whether the injection pump is still running (or, equivalently, whether
+    /// the magic 0x3FFF bridge is currently intercepting reads).
+    fn inject_active(&self) -> bool {
+        false
+    }
+
+    /// List user-file directory entries from the on-disk GFFS directory, when
+    /// the model's directory layout is known. Returns an empty list otherwise.
+    fn gffs_entries(&self) -> Vec<GffsEntry> {
+        Vec::new()
+    }
+
+    /// Number of payload bytes the injection pump has delivered to the firmware
+    /// (0 when injection is unsupported or has not run).
+    fn inject_bytes_sent(&self) -> usize {
+        0
+    }
+
+    /// Debug helper: return a copy of `len` NOR bytes starting at `off`.
+    /// Returns zeros for models without NOR or when out of range.
+    fn debug_nor_window(&self, _off: usize, _len: usize) -> Vec<u8> {
+        Vec::new()
     }
 }
 

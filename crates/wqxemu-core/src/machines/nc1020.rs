@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::audio::Audio;
 use crate::cpu::{Cpu, CpuBus, RESET_VECTOR};
 use crate::flash::{Flash, FlashStep};
+use crate::injection::InjectionBridge;
 use crate::input::Input;
 use crate::io::IoHandler;
 use crate::lcd::Lcd;
@@ -31,6 +32,8 @@ pub struct Nc1020Machine {
     #[serde(skip)]
     rom: Vec<u8>,
     nor: Vec<u8>,
+    #[serde(skip)]
+    injection: InjectionBridge,
 }
 
 impl Nc1020Machine {
@@ -45,6 +48,7 @@ impl Nc1020Machine {
             flash: Flash::new(),
             rom: vec![0; ROM_SIZE],
             nor: vec![0; NOR_SIZE],
+            injection: InjectionBridge::new(),
         };
 
         if let Some(rom_path) = &files.rom {
@@ -173,6 +177,50 @@ impl Machine for Nc1020Machine {
         self.input.set_key(key_id, pressed);
     }
 
+    fn poke(&mut self, addr: u16, val: u8) {
+        if addr < IO_LIMIT {
+            self.memory.io[addr as usize] = val;
+        } else {
+            let (region, offset) = self.memory.map_address(addr);
+            match region {
+                MemRegion::Ram => self.memory.ram[offset] = val,
+                MemRegion::Bbs => {
+                    let page = offset / 0x2000;
+                    let off = offset % 0x2000;
+                    if page < 16 && off < 0x2000 {
+                        self.memory.bbs_pages[page][off] = val;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn inject_activate(&mut self, data: Vec<u8>) {
+        self.injection.start(data);
+    }
+
+    fn inject_active(&self) -> bool {
+        self.injection.is_active()
+    }
+
+    fn inject_bytes_sent(&self) -> usize {
+        self.injection.bytes_sent
+    }
+
+    fn debug_nor_window(&self, off: usize, len: usize) -> Vec<u8> {
+        let end = (off + len).min(self.nor.len());
+        if off < end {
+            self.nor[off..end].to_vec()
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn gffs_entries(&self) -> Vec<crate::injection::GffsEntry> {
+        crate::injection::gffs_parse_dir(&self.nor, 0x27000)
+    }
+
     fn is_sleeping(&self) -> bool {
         self.input.slept
     }
@@ -187,6 +235,7 @@ impl Machine for Nc1020Machine {
             flash: &mut self.flash,
             rom: &self.rom,
             nor: &mut self.nor,
+            injection: &mut self.injection,
         };
 
         let cycles = cpu.step(&mut bus);
@@ -350,10 +399,20 @@ struct Nc1020Bus<'a> {
     flash: &'a mut Flash,
     rom: &'a [u8],
     nor: &'a mut [u8],
+    injection: &'a mut InjectionBridge,
 }
 
 impl<'a> CpuBus for Nc1020Bus<'a> {
     fn read(&mut self, addr: u16) -> u8 {
+        // Magic injection port: while the GFFS pump is active the firmware's
+        // pump routine reads file bytes from 0x3FFF. Intercept those reads so
+        // the host can feed the file without touching real LCD/IO hardware.
+        if addr == 0x3FFF {
+            if let Some(value) = self.injection.read(addr) {
+                return value;
+            }
+        }
+
         if addr < IO_LIMIT {
             return IoHandler::read(
                 addr as u8,

@@ -25,6 +25,7 @@ pub mod audio;
 pub mod cpu;
 pub mod emulator;
 pub mod flash;
+pub mod injection;
 pub mod input;
 pub mod io;
 pub mod keyboard;
@@ -36,7 +37,8 @@ pub mod save;
 pub mod timer;
 
 // Re-export main types for convenience
-pub use emulator::Emulator;
+pub use emulator::{Emulator, InjectReport};
+pub use injection::{gffs_parse_dir, inject_config, GffsEntry, InjectConfig, InjectionBridge};
 pub use input::key_ids;
 pub use keyboard::{
     key_id_for, key_id_for_host_key, layout_for, FrontendInputState, HostKey, KeyDef,

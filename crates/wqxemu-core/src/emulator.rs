@@ -10,10 +10,27 @@ use anyhow::{Context, Result};
 
 use crate::audio::SAMPLE_RATE;
 use crate::cpu::{Cpu, RESET_VECTOR};
+use crate::injection::{inject_config, GffsEntry};
 use crate::lcd::{LCD_HEIGHT, LCD_WIDTH};
 use crate::machine::{Machine, MachineModel, RomFiles};
 use crate::machines;
 use crate::save::{PersistentState, SaveState, PERSISTENT_STATE_VERSION};
+
+/// Result of a single file-injection attempt.
+#[derive(Debug, Clone)]
+pub struct InjectReport {
+    /// File name staged into the GFFS directory.
+    pub name: String,
+    /// Number of payload bytes delivered to the firmware.
+    pub bytes_sent: usize,
+    /// Original file size in bytes.
+    pub file_size: usize,
+    /// Whether the file is visible in the on-disk GFFS directory after a
+    /// clean re-mount, i.e. the firmware actually accepted and persisted it.
+    pub recognized: bool,
+    /// Full list of user-file directory entries after the operation.
+    pub entries: Vec<GffsEntry>,
+}
 
 /// Main emulator struct.
 pub struct Emulator {
@@ -83,6 +100,11 @@ impl Emulator {
         self.machine.save_nor(Path::new(path))
     }
 
+    /// Save the NAND Flash contents to a file (models that keep the GFFS in NAND).
+    pub fn save_nand(&self, path: &str) -> Result<()> {
+        self.machine.save_nand(Path::new(path))
+    }
+
     /// Set a key state.
     pub fn set_key(&mut self, key_id: u8, pressed: bool) {
         self.machine.set_key(key_id, pressed);
@@ -98,6 +120,158 @@ impl Emulator {
     pub fn run_frame(&mut self) {
         self.machine.run_frame(&mut self.cpu);
         self.frame_count += 1;
+    }
+
+    /// Run the CPU directly for `cycles` (bypassing the per-frame LCD/EOFrame
+    /// work). Used by the flash-injection flow to boot the firmware and pump
+    /// the file quickly without frame pacing.
+    pub fn run_cycles(&mut self, cycles: u64) {
+        let mut remaining = cycles;
+        while remaining > 0 {
+            let used = self.machine.step(&mut self.cpu);
+            remaining = remaining.saturating_sub(used);
+        }
+    }
+
+    /// Boot the firmware far enough that its BRK syscall dispatcher and the
+    /// GFFS file system are initialised. wangyu's `put` relies on the firmware
+    /// already being up (its emulator runs continuously); for an offline
+    /// batch injection we have to run the boot ourselves before diverting the
+    /// CPU to the pump routine at 0x3000.
+    ///
+    /// The firmware parks itself in sleep mode once it reaches the main menu,
+    /// so we stop as soon as `is_sleeping()` is true, capped at a frame budget
+    /// so we never hang if a model never sleeps.
+    pub fn boot_for_injection(&mut self) {
+        let mut frames = 0;
+        const MAX_FRAMES: u32 = 400;
+        while frames < MAX_FRAMES && !self.machine.is_sleeping() {
+            self.run_frame();
+            frames += 1;
+        }
+        log::info!(
+            "Injection boot complete after {} frames (sleeping={})",
+            frames,
+            self.machine.is_sleeping()
+        );
+    }
+
+    /// Inject `data` into the machine's NOR/NAND flash as a file named `name`
+    /// by driving the firmware's own GFFS write syscalls through the 0x3FFF
+    /// pump protocol.
+    ///
+    /// This is an offline re-implementation of wangyu's `put` command: it
+    /// boots the firmware, stages the file name / parameters and the pump
+    /// routine in RAM, diverts the CPU to the pump at 0x3000, and feeds the
+    /// file bytes through the magic 0x3FFF IO port until the firmware commits
+    /// the file. Afterward it performs a clean reboot and re-mounts the file
+    /// system to confirm the firmware actually recognises the new file.
+    ///
+    /// The caller is responsible for persisting the modified flash with
+    /// [`Emulator::save_nor`] (or the NAND equivalent); this method only
+    /// mutates the in-memory flash image so that `tmp/roms` stays untouched.
+    pub fn inject_file(&mut self, name: &str, data: &[u8]) -> Result<InjectReport> {
+        let Some(cfg) = inject_config(self.model()) else {
+            anyhow::bail!(
+                "Model `{}` does not yet support firmware-driven flash injection",
+                self.model().name()
+            );
+        };
+        if data.len() > 0xFFFF {
+            anyhow::bail!(
+                "File `{}` is too large ({} bytes); GFFS entries are limited to 65535 bytes",
+                name,
+                data.len()
+            );
+        }
+
+        // 1. Make sure the firmware (BRK dispatcher + GFFS) is up.
+        self.boot_for_injection();
+
+        // 2. Stage the 16-byte, space-padded file name.
+        let mut padded = [b' '; 16];
+        let name_bytes = name.as_bytes();
+        let n = name_bytes.len().min(16);
+        padded[..n].copy_from_slice(&name_bytes[..n]);
+        for (i, &b) in padded.iter().enumerate() {
+            self.machine.poke(cfg.name_addr + i as u16, b);
+        }
+
+        // 3. Stage the model-specific parameter bytes.
+        for &(addr, val) in &cfg.params {
+            self.machine.poke(addr, val);
+        }
+
+        // 4. Warm-reset flag: the pump's final `BRK 0x01 0xC0` reboots the
+        //    device; with this flag set the reboot is a quick warm boot that
+        //    re-mounts (rather than reformats) the file system.
+        self.machine.poke(0x02, 1);
+        self.machine.poke(0x03, 1);
+
+        // 5. Copy the pump routine to 0x3000.
+        for (i, &b) in cfg.routine.iter().enumerate() {
+            self.machine.poke(0x3000 + i as u16, b);
+        }
+
+        // 6. Arm the byte bridge and divert the CPU to the pump.
+        self.machine.inject_activate(data.to_vec());
+        self.cpu.pc = 0x3000;
+
+        // 7. Pump until the bridge reports completion. The bridge deactivates
+        //    itself once the last byte has been delivered and the firmware
+        //    reads the terminating 0.
+        const STEP_CYCLES: u64 = 2_000;
+        const MAX_STEPS: u64 = 2_000_000 / STEP_CYCLES; // ~2,000,000 cycles cap
+        let mut guard = 0u64;
+        while self.machine.inject_active() && guard < MAX_STEPS {
+            self.run_cycles(STEP_CYCLES);
+            guard += 1;
+        }
+        if self.machine.inject_active() {
+            self.machine.inject_activate(Vec::new()); // force deactivate
+            anyhow::bail!(
+                "Injection of `{}` timed out (firmware did not finish pumping)",
+                name
+            );
+        }
+
+        // 8. Let the commit syscall (BRK 0x07 ...) finish writing to flash.
+        //    The following `BRK 0x01 0xC0` begins a warm reset; bound it so we
+        //    don't emulate a whole reboot.
+        self.run_cycles(300_000);
+
+        let bytes_sent = self.machine.inject_bytes_sent();
+
+        // 9. Validate end-to-end: clean reboot and re-mount the file system,
+        //    then check whether the firmware now lists our file. `gffs_entries`
+        //    reads the on-disk directory directly, which is the ground truth
+        //    for what was persisted.
+        self.reset();
+        self.boot_for_injection();
+        let entries = self.machine.gffs_entries();
+        let recognized = entries
+            .iter()
+            .any(|e| e.name.eq_ignore_ascii_case(name.trim()));
+        log::info!(
+            "inject_file: name={} bytes_sent={} recognized={} entries={}",
+            name,
+            bytes_sent,
+            recognized,
+            entries.len()
+        );
+
+        Ok(InjectReport {
+            name: name.to_string(),
+            bytes_sent,
+            file_size: data.len(),
+            recognized,
+            entries,
+        })
+    }
+
+    /// List the user-file directory entries currently persisted in flash.
+    pub fn gffs_list(&self) -> Vec<GffsEntry> {
+        self.machine.gffs_entries()
     }
 
     /// Read a memory/IO address for debugging.
