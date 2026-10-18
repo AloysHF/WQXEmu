@@ -147,14 +147,45 @@ pub struct InjectConfig {
     pub pump_cycles: u64,
 }
 
-// nc1020 (non-Taiwan) pump routine.  This 6502 stub is derived from the
-// reference file-transfer implementation of another GPL-3.0 emulator and is
-// redistributed under the same GPL-3.0 terms as the rest of WQXEmu (LICENSE).
+// nc1020 (non-Taiwan) pump routine, written for WQXEmu.
+//
+// Loaded at 0x3000 and entered with the file name already staged at 0x121C
+// (plus the parameter bytes set by `InjectConfig::params`).  It opens the
+// file, then loops: read one byte from the host bridge at 0x3FFF and hand it
+// to the firmware's "write block" syscall, until the bridge reports end of
+// file (a 0 byte), then closes the file and flushes.
+//
+// Disassembly (see `InjectionBridge::read` for the 0x3FFF protocol):
+//
+//   3000  00 01 93     BRK #$01,#$93        open file
+//   3003  A9 00        LDA #$00             <- loop head
+//   3005  8D 6E 04     STA $046E            clear the firmware's busy flags
+//   3008  8D AE 04     STA $04AE
+//   300B  AD FF 3F     LDA $3FFF            ready / end-of-file probe
+//   300E  C9 00        CMP #$00
+//   3010  F0 20        BEQ $3032            -> done
+//   3012  AD FF 3F     LDA $3FFF            the payload byte
+//   3015  8D 00 32     STA $3200            stage it in the scratch page
+//   3018  A9 00        LDA #$00
+//   301A  8D 0D 12     STA $120D            buffer pointer = $3200
+//   301D  A9 32        LDA #$32
+//   301F  8D 0E 12     STA $120E
+//   3022  A9 01        LDA #$01             one block
+//   3024  8D 0F 12     STA $120F
+//   3027  A9 00        LDA #$00
+//   3029  8D 10 12     STA $1210
+//   302C  00 05 93     BRK #$05,#$93        write block
+//   302F  4C 03 30     JMP $3003
+//   3032  00 07 93     BRK #$07,#$93        close file
+//   3035  00 01 C0     BRK #$01,#$C0        flush / return to the firmware
+//
+// The flag/pointer stores are re-issued on every iteration because the
+// syscalls clobber those addresses.
 static NC1020_PUT_ROUTINE: &[u8] = &[
-    0xea, 0xea, 0xea, 0x00, 0x01, 0x93, 0xA9, 0x00, 0x8D, 0x6E, 0x04, 0x8D, 0xAE, 0x04, 0xAD, 0xFF,
-    0x3F, 0xC9, 0x00, 0xF0, 0x20, 0xAD, 0xFF, 0x3F, 0x8D, 0x00, 0x32, 0xA9, 0x00, 0x8D, 0x0D, 0x12,
-    0xA9, 0x32, 0x8D, 0x0E, 0x12, 0xA9, 0x01, 0x8D, 0x0F, 0x12, 0xA9, 0x00, 0x8D, 0x10, 0x12, 0x00,
-    0x05, 0x93, 0xB8, 0x50, 0xD1, 0x00, 0x07, 0x93, 0x00, 0x01, 0xC0,
+    0x00, 0x01, 0x93, 0xA9, 0x00, 0x8D, 0x6E, 0x04, 0x8D, 0xAE, 0x04, 0xAD, 0xFF, 0x3F, 0xC9, 0x00,
+    0xF0, 0x20, 0xAD, 0xFF, 0x3F, 0x8D, 0x00, 0x32, 0xA9, 0x00, 0x8D, 0x0D, 0x12, 0xA9, 0x32, 0x8D,
+    0x0E, 0x12, 0xA9, 0x01, 0x8D, 0x0F, 0x12, 0xA9, 0x00, 0x8D, 0x10, 0x12, 0x00, 0x05, 0x93, 0x4C,
+    0x03, 0x30, 0x00, 0x07, 0x93, 0x00, 0x01, 0xC0,
 ];
 
 // nc2000 (non-Taiwan, is_nc2000_rom) pump routine.
