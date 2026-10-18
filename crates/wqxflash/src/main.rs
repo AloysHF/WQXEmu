@@ -55,6 +55,21 @@ enum Command {
         #[arg(long)]
         rom_dir: PathBuf,
     },
+    /// Boot the firmware for N frames and report any NOR mutations (debug
+    /// helper for reverse-engineering the firmware's own flash writes).
+    Trace {
+        #[arg(long)]
+        model: String,
+        #[arg(long)]
+        rom_dir: PathBuf,
+        /// Number of frames to boot before sampling.
+        #[arg(long, default_value_t = 400)]
+        frames: u32,
+        /// Fill the NOR image with 0xFF before booting (simulate a blank,
+        /// unformatted flash to trigger the firmware formatter).
+        #[arg(long, default_value_t = false)]
+        blank_nor: bool,
+    },
 }
 
 fn resolve_model(s: &str) -> Result<MachineModel> {
@@ -171,6 +186,44 @@ fn main() -> Result<()> {
                     "  {:<16} len={:5} start=0x{:04X}",
                     e.name, e.length, e.start
                 );
+            }
+            Ok(())
+        }
+        Command::Trace {
+            model,
+            rom_dir,
+            frames,
+            blank_nor,
+        } => {
+            let model = resolve_model(&model)?;
+            let mut emu = build_emulator(model, &rom_dir)?;
+            if blank_nor {
+                emu.debug_fill_nor(0xFF);
+            }
+            let before = emu.debug_nor_bytes(0, 0x100000);
+            for _ in 0..frames {
+                emu.run_frame();
+            }
+            let after = emu.debug_nor_bytes(0, 0x100000);
+            let mut changed = 0usize;
+            let mut samples = Vec::new();
+            for (i, (a, b)) in before.iter().zip(after.iter()).enumerate() {
+                if a != b {
+                    changed += 1;
+                    if samples.len() < 48 {
+                        samples.push((i, *a, *b));
+                    }
+                }
+            }
+            println!(
+                "boot {} frames: {} NOR bytes changed (of {}); PC=0x{:04X}",
+                frames,
+                changed,
+                before.len(),
+                emu.pc()
+            );
+            for (i, a, b) in samples {
+                println!("  [0x{i:05X}] {a:02X} -> {b:02X}");
             }
             Ok(())
         }

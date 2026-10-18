@@ -217,6 +217,10 @@ impl Machine for Nc1020Machine {
         }
     }
 
+    fn debug_fill_nor(&mut self, val: u8) {
+        self.nor.fill(val);
+    }
+
     fn gffs_entries(&self) -> Vec<crate::injection::GffsEntry> {
         crate::injection::gffs_parse_dir(&self.nor, 0x27000)
     }

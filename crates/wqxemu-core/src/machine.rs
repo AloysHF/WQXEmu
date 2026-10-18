@@ -373,6 +373,10 @@ pub trait Machine: Send {
     fn debug_nor_window(&self, _off: usize, _len: usize) -> Vec<u8> {
         Vec::new()
     }
+
+    /// Debug helper: fill the whole NOR image with `val` (e.g. 0xFF to simulate
+    /// a blank/unformatted flash). Used to trigger the firmware's formatter.
+    fn debug_fill_nor(&mut self, _val: u8) {}
 }
 
 /// Shared hardware component types that machines embed.

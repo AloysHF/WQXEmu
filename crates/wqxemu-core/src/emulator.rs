@@ -208,14 +208,48 @@ impl Emulator {
         self.machine.poke(0x02, 1);
         self.machine.poke(0x03, 1);
 
-        // 5. Copy the pump routine to 0x3000.
-        for (i, &b) in cfg.routine.iter().enumerate() {
+        // 5. Copy the pump routine to 0x3000. `WQX_SIG` lets us override the
+        //    BRK signature byte (0x93) to probe which signature a firmware
+        //    build expects.
+        let mut routine: Vec<u8> = cfg.routine.to_vec();
+        if let Ok(sig) = std::env::var("WQX_SIG") {
+            if let Ok(value) = u8::from_str_radix(sig.trim_start_matches("0x"), 16) {
+                for b in routine.iter_mut() {
+                    if *b == 0x93 {
+                        *b = value;
+                    }
+                }
+            }
+        }
+        for (i, &b) in routine.iter().enumerate() {
             self.machine.poke(0x3000 + i as u16, b);
         }
 
         // 6. Arm the byte bridge and divert the CPU to the pump.
         self.machine.inject_activate(data.to_vec());
         self.cpu.pc = 0x3000;
+
+        if std::env::var("WQX_TRACE").is_ok() {
+            let mut trace: Vec<u16> = Vec::new();
+            for _ in 0..4000u32 {
+                trace.push(self.cpu.pc);
+                self.machine.step(&mut self.cpu);
+                if !self.machine.inject_active() {
+                    break;
+                }
+            }
+            let hits = |t: u16| trace.contains(&t);
+            let max = trace.iter().copied().max().unwrap_or(0);
+            log::info!(
+                "TRACE n={} E999={} E8E1={} E768={} max=0x{:04X}",
+                trace.len(),
+                hits(0xE999),
+                hits(0xE8E1),
+                hits(0xE768),
+                max
+            );
+            log::info!("TRACE seq: {:04X?}", &trace[..trace.len().min(160)]);
+        }
 
         // 7. Pump until the bridge reports completion. The bridge deactivates
         //    itself once the last byte has been delivered and the firmware
@@ -272,6 +306,18 @@ impl Emulator {
     /// List the user-file directory entries currently persisted in flash.
     pub fn gffs_list(&self) -> Vec<GffsEntry> {
         self.machine.gffs_entries()
+    }
+
+    /// Read a window of the on-disk NOR image (logical, already un-swapped).
+    /// Debug helper for tracing flash mutations.
+    pub fn debug_nor_bytes(&self, off: usize, len: usize) -> Vec<u8> {
+        self.machine.debug_nor_window(off, len)
+    }
+
+    /// Debug helper: fill the whole NOR image with `val` (e.g. 0xFF for a
+    /// blank/unformatted flash).
+    pub fn debug_fill_nor(&mut self, val: u8) {
+        self.machine.debug_fill_nor(val);
     }
 
     /// Read a memory/IO address for debugging.
