@@ -55,6 +55,27 @@ enum Command {
         #[arg(long)]
         rom_dir: PathBuf,
     },
+    /// Boot, then try each key id and report which ones cause the LCD to draw
+    /// (debug helper for discovering the UI navigation keys).
+    Keysweep {
+        #[arg(long)]
+        model: String,
+        #[arg(long)]
+        rom_dir: PathBuf,
+        #[arg(long, default_value_t = 600)]
+        frames: u32,
+    },
+    /// Boot and record the BRK syscalls (id, signature, handler) the firmware
+    /// itself issues (debug helper).
+    Syscalls {
+        #[arg(long)]
+        model: String,
+        #[arg(long)]
+        rom_dir: PathBuf,
+        /// Total CPU cycles to trace.
+        #[arg(long, default_value_t = 20_000_000)]
+        cycles: u64,
+    },
     /// Boot the firmware for N frames and report any NOR mutations (debug
     /// helper for reverse-engineering the firmware's own flash writes).
     Trace {
@@ -69,6 +90,12 @@ enum Command {
         /// unformatted flash to trigger the firmware formatter).
         #[arg(long, default_value_t = false)]
         blank_nor: bool,
+        /// Comma-separated hex key ids to press after boot (e.g. "0E,1A,1D").
+        #[arg(long)]
+        keys: Option<String>,
+        /// Print the LCD framebuffer as ASCII after boot + keys.
+        #[arg(long, default_value_t = false)]
+        dump_lcd: bool,
     },
 }
 
@@ -189,19 +216,78 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        Command::Keysweep {
+            model,
+            rom_dir,
+            frames,
+        } => {
+            let model = resolve_model(&model)?;
+            let mut emu = build_emulator(model, &rom_dir)?;
+            for _ in 0..frames {
+                emu.run_frame();
+            }
+            let ink = |emu: &Emulator| emu.framebuffer().iter().filter(|&&p| p == 0).count();
+            let mut prev = ink(&emu);
+            println!("baseline ink pixels: {prev}");
+            for id in 0u8..0x40 {
+                emu.debug_press_key(id, 4);
+                for _ in 0..4 {
+                    emu.run_frame();
+                }
+                let now = ink(&emu);
+                if now != prev {
+                    println!(
+                        "key 0x{id:02X}: ink {prev} -> {now}  (delta {:+})",
+                        now as i64 - prev as i64
+                    );
+                    prev = now;
+                }
+            }
+            Ok(())
+        }
+        Command::Syscalls {
+            model,
+            rom_dir,
+            cycles,
+        } => {
+            let model = resolve_model(&model)?;
+            let mut emu = build_emulator(model, &rom_dir)?;
+            let seen = emu.trace_syscalls(cycles);
+            println!(
+                "firmware BRK syscalls during {} cycles ({} distinct):",
+                cycles,
+                seen.len()
+            );
+            for (id, sig, ptr) in &seen {
+                println!("  id=0x{id:02X} sig=0x{sig:02X} handler=0x{ptr:04X}");
+            }
+            Ok(())
+        }
         Command::Trace {
             model,
             rom_dir,
             frames,
             blank_nor,
+            keys,
+            dump_lcd,
         } => {
             let model = resolve_model(&model)?;
             let mut emu = build_emulator(model, &rom_dir)?;
             if blank_nor {
                 emu.debug_fill_nor(0xFF);
             }
-            let before = emu.debug_nor_bytes(0, 0x100000);
             for _ in 0..frames {
+                emu.run_frame();
+            }
+            let before = emu.debug_nor_bytes(0, 0x100000);
+            if let Some(keys) = keys {
+                for part in keys.split(',') {
+                    if let Ok(id) = u8::from_str_radix(part.trim(), 16) {
+                        emu.debug_press_key(id, 3);
+                    }
+                }
+            }
+            for _ in 0..30 {
                 emu.run_frame();
             }
             let after = emu.debug_nor_bytes(0, 0x100000);
@@ -216,14 +302,30 @@ fn main() -> Result<()> {
                 }
             }
             println!(
-                "boot {} frames: {} NOR bytes changed (of {}); PC=0x{:04X}",
+                "boot {} frames: {} NOR bytes changed (of {}); PC=0x{:04X} sleeping={} io06=0x{:02X} io0C=0x{:02X}",
                 frames,
                 changed,
                 before.len(),
-                emu.pc()
+                emu.pc(),
+                emu.is_sleeping(),
+                emu.peek(0x06),
+                emu.peek(0x0C)
             );
             for (i, a, b) in samples {
                 println!("  [0x{i:05X}] {a:02X} -> {b:02X}");
+            }
+            if dump_lcd {
+                let fb = emu.framebuffer();
+                let (w, h) = (emu.lcd_width(), emu.lcd_height());
+                println!("--- LCD {w}x{h} ---");
+                for y in 0..h {
+                    let mut line = String::with_capacity(w);
+                    for x in 0..w {
+                        // ink (black) is 0x000000; off (white) is 0xFFFFFFFF.
+                        line.push(if fb[y * w + x] == 0 { '#' } else { '.' });
+                    }
+                    println!("{line}");
+                }
             }
             Ok(())
         }

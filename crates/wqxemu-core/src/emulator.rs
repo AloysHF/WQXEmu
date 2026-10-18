@@ -341,6 +341,43 @@ impl Emulator {
         self.machine.debug_fill_nor(val);
     }
 
+    /// Debug helper: step the CPU instruction-by-instruction for `cycles`,
+    /// recording every BRK syscall dispatch the firmware itself performs
+    /// (PC hits the obj_lu dispatcher 0xE8E1). Returns distinct
+    /// `(id, sig, handler_ptr)` tuples in first-seen order.
+    pub fn trace_syscalls(&mut self, cycles: u64) -> Vec<(u8, u8, u16)> {
+        let mut seen: Vec<(u8, u8, u16)> = Vec::new();
+        let mut last: Option<(u8, u8)> = None;
+        let mut remaining = cycles;
+        while remaining > 0 {
+            let pc = self.cpu.pc;
+            if pc == 0xE8E1 {
+                // Dispatcher entry: 0xB0 = id, 0x046D = signature.
+                last = Some((self.machine.peek(0xB0), self.machine.peek(0x046D)));
+            } else if pc == 0xE996 {
+                // `jmp (0xB0)`: 0xB0/B1 now hold the final handler pointer.
+                if let Some((id, sig)) = last {
+                    let ptr = self.machine.peek_u16(0xB0);
+                    if !seen.contains(&(id, sig, ptr)) {
+                        seen.push((id, sig, ptr));
+                    }
+                }
+            }
+            remaining = remaining.saturating_sub(self.machine.step(&mut self.cpu));
+        }
+        seen
+    }
+
+    /// Debug helper: press `key_id` for `hold_frames`, then release.
+    pub fn debug_press_key(&mut self, key_id: u8, hold_frames: u32) {
+        self.machine.set_key(key_id, true);
+        for _ in 0..hold_frames {
+            self.run_frame();
+        }
+        self.machine.set_key(key_id, false);
+        self.run_frame();
+    }
+
     /// Read a memory/IO address for debugging.
     pub fn peek(&self, addr: u16) -> u8 {
         self.machine.peek(addr)
