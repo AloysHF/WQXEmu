@@ -72,9 +72,18 @@ enum Command {
         model: String,
         #[arg(long)]
         rom_dir: PathBuf,
-        /// Total CPU cycles to trace.
+        /// Total CPU cycles to trace (ignored when --keys is given).
         #[arg(long, default_value_t = 20_000_000)]
         cycles: u64,
+        /// Boot frames before applying --keys.
+        #[arg(long, default_value_t = 200)]
+        boot_frames: u32,
+        /// Frames to trace after the last key.
+        #[arg(long, default_value_t = 120)]
+        post_frames: u32,
+        /// Comma-separated hex key ids to press while tracing.
+        #[arg(long)]
+        keys: Option<String>,
     },
     /// Boot the firmware for N frames and report any NOR mutations (debug
     /// helper for reverse-engineering the firmware's own flash writes).
@@ -96,6 +105,12 @@ enum Command {
         /// Print the LCD framebuffer as ASCII after boot + keys.
         #[arg(long, default_value_t = false)]
         dump_lcd: bool,
+        /// Save the LCD framebuffer as a PNG after boot + keys.
+        #[arg(long)]
+        png: Option<String>,
+        /// Save the (possibly modified) NOR image after the session.
+        #[arg(long)]
+        save_out: Option<String>,
     },
 }
 
@@ -110,8 +125,11 @@ fn build_emulator(model: MachineModel, rom_dir: &Path) -> Result<Emulator> {
     files
         .validate_for_model(model)
         .with_context(|| format!("Firmware files do not match model `{}`", model.name()))?;
-    Emulator::new(model, &files)
-        .with_context(|| format!("Failed to create {} emulator", model.name()))
+    let mut emu = Emulator::new(model, &files)
+        .with_context(|| format!("Failed to create {} emulator", model.name()))?;
+    // Match the desktop frontend, which resets the CPU after construction.
+    emu.reset();
+    Ok(emu)
 }
 
 /// Ensure `out` is not inside `rom_dir` (we must never write back to the
@@ -128,6 +146,25 @@ fn guard_outside_rom_dir(rom_dir: &Path, out: &Path) -> Result<()> {
             rom_dir.display()
         );
     }
+    Ok(())
+}
+
+/// Save an XRGB8888 LCD framebuffer as a PNG.
+fn save_lcd_png(pixels: &[u32], width: usize, height: usize, path: &str) -> Result<()> {
+    use image::{ImageBuffer, Rgba};
+    const SCALE: usize = 4;
+    let img = ImageBuffer::from_fn((width * SCALE) as u32, (height * SCALE) as u32, |x, y| {
+        let sx = (x as usize) / SCALE;
+        let sy = (y as usize) / SCALE;
+        let p = pixels[sy * width + sx];
+        Rgba([
+            ((p >> 16) & 0xFF) as u8,
+            ((p >> 8) & 0xFF) as u8,
+            (p & 0xFF) as u8,
+            ((p >> 24) & 0xFF) as u8,
+        ])
+    });
+    img.save(path)?;
     Ok(())
 }
 
@@ -226,7 +263,13 @@ fn main() -> Result<()> {
             for _ in 0..frames {
                 emu.run_frame();
             }
-            let ink = |emu: &Emulator| emu.framebuffer().iter().filter(|&&p| p == 0).count();
+            // XRGB: ink (black) = 0xFF000000, background (white) = 0xFFFFFFFF.
+            let ink = |emu: &Emulator| {
+                emu.framebuffer()
+                    .iter()
+                    .filter(|&&p| p == 0xFF00_0000)
+                    .count()
+            };
             let mut prev = ink(&emu);
             println!("baseline ink pixels: {prev}");
             for id in 0u8..0x40 {
@@ -249,15 +292,33 @@ fn main() -> Result<()> {
             model,
             rom_dir,
             cycles,
+            boot_frames,
+            post_frames,
+            keys,
         } => {
             let model = resolve_model(&model)?;
             let mut emu = build_emulator(model, &rom_dir)?;
-            let seen = emu.trace_syscalls(cycles);
-            println!(
-                "firmware BRK syscalls during {} cycles ({} distinct):",
-                cycles,
-                seen.len()
-            );
+            let seen = if let Some(keys) = keys {
+                let ids: Vec<u8> = keys
+                    .split(',')
+                    .filter_map(|p| u8::from_str_radix(p.trim(), 16).ok())
+                    .collect();
+                let seen = emu.trace_key_session(boot_frames, &ids, post_frames);
+                println!(
+                    "firmware BRK syscalls for keys {:02X?} ({} distinct):",
+                    ids,
+                    seen.len()
+                );
+                seen
+            } else {
+                let seen = emu.trace_syscalls(cycles);
+                println!(
+                    "firmware BRK syscalls during {} cycles ({} distinct):",
+                    cycles,
+                    seen.len()
+                );
+                seen
+            };
             for (id, sig, ptr) in &seen {
                 println!("  id=0x{id:02X} sig=0x{sig:02X} handler=0x{ptr:04X}");
             }
@@ -270,6 +331,8 @@ fn main() -> Result<()> {
             blank_nor,
             keys,
             dump_lcd,
+            png,
+            save_out,
         } => {
             let model = resolve_model(&model)?;
             let mut emu = build_emulator(model, &rom_dir)?;
@@ -283,11 +346,11 @@ fn main() -> Result<()> {
             if let Some(keys) = keys {
                 for part in keys.split(',') {
                     if let Ok(id) = u8::from_str_radix(part.trim(), 16) {
-                        emu.debug_press_key(id, 3);
+                        emu.debug_press_key(id, 6);
                     }
                 }
             }
-            for _ in 0..30 {
+            for _ in 0..200 {
                 emu.run_frame();
             }
             let after = emu.debug_nor_bytes(0, 0x100000);
@@ -305,8 +368,9 @@ fn main() -> Result<()> {
                 .map(|i| format!("{:02X}", emu.peek(0x9C0 + i)))
                 .collect::<Vec<_>>()
                 .join(" ");
+            let (wc, po, eo) = emu.flash_stats();
             println!(
-                "boot {} frames: {} NOR bytes changed (of {}); PC=0x{:04X} sleeping={} io06=0x{:02X} io0C=0x{:02X} RAM[0x9C0..]=[{}]",
+                "boot {} frames: {} NOR bytes changed (of {}); PC=0x{:04X} sleeping={} io06=0x{:02X} io0C=0x{:02X} flash(w={} prog={} erase={}) RAM[0x9C0..]=[{}]",
                 frames,
                 changed,
                 before.len(),
@@ -314,6 +378,9 @@ fn main() -> Result<()> {
                 emu.is_sleeping(),
                 emu.peek(0x06),
                 emu.peek(0x0C),
+                wc,
+                po,
+                eo,
                 ram9c0
             );
             for (i, a, b) in samples {
@@ -326,11 +393,24 @@ fn main() -> Result<()> {
                 for y in 0..h {
                     let mut line = String::with_capacity(w);
                     for x in 0..w {
-                        // ink (black) is 0x000000; off (white) is 0xFFFFFFFF.
-                        line.push(if fb[y * w + x] == 0 { '#' } else { '.' });
+                        // ink (black) is 0xFF000000; off (white) is 0xFFFFFFFF.
+                        line.push(if fb[y * w + x] == 0xFF00_0000 {
+                            '#'
+                        } else {
+                            '.'
+                        });
                     }
                     println!("{line}");
                 }
+            }
+            if let Some(path) = png {
+                save_lcd_png(&emu.framebuffer(), emu.lcd_width(), emu.lcd_height(), &path)?;
+                println!("LCD PNG saved to {path}");
+            }
+            if let Some(path) = save_out {
+                emu.save_nor(&path)
+                    .with_context(|| format!("Failed to save NOR to {path}"))?;
+                println!("modified NOR saved to {path}");
             }
             Ok(())
         }

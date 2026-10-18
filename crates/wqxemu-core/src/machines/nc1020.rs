@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::audio::Audio;
 use crate::cpu::{Cpu, CpuBus, RESET_VECTOR};
-use crate::flash::{Flash, FlashStep};
+use crate::flash::Flash;
 use crate::injection::InjectionBridge;
 use crate::input::Input;
 use crate::io::IoHandler;
@@ -219,6 +219,14 @@ impl Machine for Nc1020Machine {
 
     fn debug_fill_nor(&mut self, val: u8) {
         self.nor.fill(val);
+    }
+
+    fn flash_stats(&self) -> (u32, u32, u32) {
+        (
+            self.flash.write_calls,
+            self.flash.program_ops,
+            self.flash.erase_ops,
+        )
     }
 
     fn gffs_entries(&self) -> Vec<crate::injection::GffsEntry> {
@@ -560,8 +568,12 @@ impl<'a> CpuBus for Nc1020Bus<'a> {
             return;
         }
 
-        // Banked region writes (0x4000-0x7FFF)
-        if addr < 0x8000 {
+        // Banked region writes (0x4000-0xBFFF). This includes the full 32KB
+        // NOR window: the flash command sequence writes the unlock byte to
+        // 0xAAAA, which lives in the 0x8000-0xBFFF half, so those writes must
+        // reach the flash controller too (previously they were dropped as
+        // "read-only", which silently broke every firmware flash write).
+        if addr < 0xC000 {
             let (region, offset) = self.memory.map_address(addr);
             match region {
                 MemRegion::Ram if offset < RAM_SIZE => {
@@ -574,13 +586,7 @@ impl<'a> CpuBus for Nc1020Bus<'a> {
                 }
                 _ => {} // ROM/BBS are read-only
             }
-            return;
         }
-
-        // 0x8000+: Read-only (ROM/BBS)
-        // But flash reset command can be sent here
-        if addr == 0x8000 && value == 0xF0 {
-            self.flash.step = FlashStep::Idle;
-        }
+        // 0xC000+: BBS / fixed ROM are read-only.
     }
 }

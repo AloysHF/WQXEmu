@@ -377,6 +377,12 @@ pub trait Machine: Send {
     /// Debug helper: fill the whole NOR image with `val` (e.g. 0xFF to simulate
     /// a blank/unformatted flash). Used to trigger the firmware's formatter.
     fn debug_fill_nor(&mut self, _val: u8) {}
+
+    /// Diagnostics: `(write_calls, program_ops, erase_ops)` for the NOR flash
+    /// controller.
+    fn flash_stats(&self) -> (u32, u32, u32) {
+        (0, 0, 0)
+    }
 }
 
 /// Shared hardware component types that machines embed.

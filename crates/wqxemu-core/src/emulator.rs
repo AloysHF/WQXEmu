@@ -341,6 +341,11 @@ impl Emulator {
         self.machine.debug_fill_nor(val);
     }
 
+    /// Diagnostics: `(write_calls, program_ops, erase_ops)` for the NOR flash.
+    pub fn flash_stats(&self) -> (u32, u32, u32) {
+        self.machine.flash_stats()
+    }
+
     /// Debug helper: step the CPU instruction-by-instruction for `cycles`,
     /// recording every BRK syscall dispatch the firmware itself performs
     /// (PC hits the obj_lu dispatcher 0xE8E1). Returns distinct
@@ -368,14 +373,65 @@ impl Emulator {
         seen
     }
 
-    /// Debug helper: press `key_id` for `hold_frames`, then release.
+    /// Trace syscalls across a scripted boot + key sequence, returning the
+    /// distinct `(id, sig, handler)` tuples issued while the keys run.
+    pub fn trace_key_session(
+        &mut self,
+        boot_frames: u32,
+        keys: &[u8],
+        post_frames: u32,
+    ) -> Vec<(u8, u8, u16)> {
+        let mut seen: Vec<(u8, u8, u16)> = Vec::new();
+        let mut last: Option<(u8, u8)> = None;
+        for _ in 0..boot_frames {
+            self.step_frame_traced(&mut seen, &mut last);
+        }
+        for &key in keys {
+            self.machine.set_key(key, true);
+            for _ in 0..8 {
+                self.step_frame_traced(&mut seen, &mut last);
+            }
+            self.machine.set_key(key, false);
+            for _ in 0..12 {
+                self.step_frame_traced(&mut seen, &mut last);
+            }
+        }
+        for _ in 0..post_frames {
+            self.step_frame_traced(&mut seen, &mut last);
+        }
+        seen
+    }
+
+    fn step_frame_traced(&mut self, seen: &mut Vec<(u8, u8, u16)>, last: &mut Option<(u8, u8)>) {
+        let target = self.machine.cycles_per_frame();
+        let mut cycles = 0u64;
+        while cycles < target {
+            let pc = self.cpu.pc;
+            if pc == 0xE8E1 {
+                *last = Some((self.machine.peek(0xB0), self.machine.peek(0x046D)));
+            } else if pc == 0xE996 {
+                if let Some((id, sig)) = *last {
+                    let ptr = self.machine.peek_u16(0xB0);
+                    if !seen.contains(&(id, sig, ptr)) {
+                        seen.push((id, sig, ptr));
+                    }
+                }
+            }
+            cycles += self.machine.step(&mut self.cpu);
+        }
+        self.machine.end_of_frame(&mut self.cpu);
+    }
+
+    /// Debug helper: press `key_id` for `hold_frames`, then release with a gap.
     pub fn debug_press_key(&mut self, key_id: u8, hold_frames: u32) {
         self.machine.set_key(key_id, true);
         for _ in 0..hold_frames {
             self.run_frame();
         }
         self.machine.set_key(key_id, false);
-        self.run_frame();
+        for _ in 0..12 {
+            self.run_frame();
+        }
     }
 
     /// Read a memory/IO address for debugging.
