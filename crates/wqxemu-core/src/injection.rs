@@ -600,6 +600,10 @@ mod tests {
         assert_eq!(fat.len(), 1);
         assert_eq!(fat[0].slot, 1);
         assert_eq!(fat[0].blocks, 3);
+        // A `.bin` must be filed as an application, not as a data file: on real
+        // dumps 0x80AB covers the programs (calculator / game / txt_view) while
+        // 0x808A is reserved for dictionary and codec data.
+        assert_eq!(fat[0].flags, nand_flags::APPLICATION);
         assert_eq!(
             fat[0].pages,
             vec![
@@ -719,7 +723,9 @@ mod tests {
 // The first NAND pages hold a table of 32-byte records, one per file:
 //
 //   +0  u16 slot           1-based, sequential across records (1, 2, 3, ...)
-//   +2  u16 flags          0x808A = file, 0xE0FF = directory, 0x80BA = root
+//   +2  u16 flags          0x80AB = application, 0x808A = data file,
+//                          0x80AF = text/document, 0x80BA = root,
+//                          0xE0FF / 0xE0EF / 0xE0CF = directory
 //   +4  u16 signature      NC2000: C0 79, NC3000: C0 7A  (model-specific)
 //   +8  u16 const          NC2000: 79 00, NC3000: 7A 08  (model-specific)
 //   +14 u16 blocks         number of NAND pages the file occupies
@@ -941,7 +947,8 @@ pub fn nand_directories(nand: &[u8], min_entries: usize) -> Vec<NandDirEntry> {
 //     per-page spare linkage is required.
 //   * The FAT is a sequence of 32-byte records, one per slot:
 //       [0:2]  slot (LE, 1-based, sequential)
-//       [2:4]  flags  (0x808A for a file, 0xE0FF for a directory)
+//       [2:4]  flags  (see `nand_flags`: 0x80AB application, 0x808A data,
+//                     0x80AF text, 0xE0FF directory)
 //       [4:6]  signature `C0 79`
 //       [8:10] `79 00`  (observed constant in every record)
 //       [14:16] blocks (LE) — number of data pages
@@ -1169,6 +1176,42 @@ fn fat_record_pages(start: u16, blocks: u16) -> Vec<u16> {
     v
 }
 
+/// FAT record flags, as observed on real dumps (NC2000 slots cross-checked
+/// against their file names: `0x80AB` covers calculator / namecard / game /
+/// txt_view / exam, `0x808A` covers the dictionary and codec *data* files).
+pub mod nand_flags {
+    /// Root / `sysdir` entry.
+    pub const ROOT: u16 = 0x80BA;
+    /// An executable application (`.bin`, GVBASIC `.bas`, LAVA `.lav`).
+    pub const APPLICATION: u16 = 0x80AB;
+    /// A plain data file (dictionaries, codec tables, ...).
+    pub const DATA: u16 = 0x808A;
+    /// A document / text file (seen on NC3000, e.g. `.gbk`).
+    pub const TEXT: u16 = 0x80AF;
+    /// Directory.
+    pub const DIRECTORY: u16 = 0xE0FF;
+}
+
+/// Pick the FAT flags for a file name so the firmware files it under the right
+/// category.  Anything that looks like a program becomes an application; the
+/// text/document extensions map to `TEXT`; everything else is a data file.
+fn nand_file_flags(name: &str) -> u16 {
+    let lower = name.to_ascii_lowercase();
+    if lower.ends_with(".gbk") || lower.ends_with(".txt") {
+        nand_flags::TEXT
+    } else if lower.ends_with(".bin")
+        || lower.ends_with(".bas")
+        || lower.ends_with(".lav")
+        || lower.ends_with(".x")
+    {
+        nand_flags::APPLICATION
+    } else {
+        // Unknown extension: treat it as a program, which is what an injected
+        // game is in practice.
+        nand_flags::APPLICATION
+    }
+}
+
 /// Write (or overwrite) the FAT record for `slot`.
 fn write_fat_record(
     nand: &mut [u8],
@@ -1176,6 +1219,7 @@ fn write_fat_record(
     slot: u16,
     blocks: u16,
     start: u16,
+    flags: u16,
 ) -> anyhow::Result<()> {
     let rec_index = (slot - 1) as usize;
     let page = params.abs_page(params.fat_first_page) + rec_index / 16;
@@ -1188,8 +1232,8 @@ fn write_fat_record(
     e.fill(0xFF);
     e[0] = (slot & 0xFF) as u8;
     e[1] = ((slot >> 8) & 0xFF) as u8;
-    e[2] = 0x8A;
-    e[3] = 0x80; // flags 0x808A (file)
+    e[2] = (flags & 0xFF) as u8;
+    e[3] = ((flags >> 8) & 0xFF) as u8;
     e[4] = params.fat_sig[0];
     e[5] = params.fat_sig[1]; // model-specific signature
     e[8] = params.fat_const[0];
@@ -1308,7 +1352,15 @@ pub fn nand_inject(
         nand[s + 512 + 11] = 0x00;
     }
 
-    write_fat_record(nand, params, slot, n_pages as u16, start_logical as u16)?;
+    let flags = nand_file_flags(name);
+    write_fat_record(
+        nand,
+        params,
+        slot,
+        n_pages as u16,
+        start_logical as u16,
+        flags,
+    )?;
     write_dir_entry(nand, dir_off, slot, name)?;
 
     Ok(NandInjection {
