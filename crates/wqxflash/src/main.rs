@@ -11,7 +11,7 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 use wqxemu_core::injection::{
-    block_entries, block_inject, nand_detect_params, nand_fat_entries, nand_inject,
+    block_delete, block_entries, block_inject, nand_detect_params, nand_fat_entries, nand_inject,
     nand_name_to_string, nand_root_entries, NandFsParams, NandInjection,
 };
 use wqxemu_core::{Emulator, MachineModel, RomFiles};
@@ -80,6 +80,28 @@ enum Command {
         /// Directory containing the firmware dumps (read-only).
         #[arg(long)]
         rom_dir: PathBuf,
+    },
+    /// Remove a file from the PC1000 / CC800 file area (banks 2..=13) and write
+    /// the image out again.  Freeing a low bank is what makes room for a new
+    /// game that the firmware's list actually shows (it only lists the first
+    /// five files).
+    Delete {
+        /// Target model: pc1000 or cc800.
+        #[arg(long)]
+        model: String,
+        /// Directory containing the firmware dumps (read-only).
+        #[arg(long)]
+        rom_dir: PathBuf,
+        /// Path to write the modified image to (must not be inside `rom_dir`).
+        #[arg(long)]
+        out: PathBuf,
+        /// File to remove (ASCII names only; use --bank otherwise).
+        #[arg(long)]
+        name: Option<String>,
+        /// Remove by bank number — works for names that are not ASCII, since
+        /// the stored names are raw Big5 / GB2312 bytes.
+        #[arg(long)]
+        bank: Option<usize>,
     },
     /// Directly add/update a game file in the GFFS directory of a flash image
     /// (works offline on the NOR dump; no firmware execution needed).
@@ -654,6 +676,48 @@ fn main() -> Result<()> {
                     }
                 }
             }
+            Ok(())
+        }
+        Command::Delete {
+            model,
+            rom_dir,
+            out,
+            name,
+            bank,
+        } => {
+            let model = resolve_model(&model)?;
+            if !matches!(model, MachineModel::Pc1000 | MachineModel::Cc800) {
+                anyhow::bail!("delete is only implemented for pc1000 / cc800 (block file system)");
+            }
+            if name.is_none() && bank.is_none() {
+                anyhow::bail!("give either --name <file> or --bank <n>");
+            }
+            let files = RomFiles::from_dir(&rom_dir)?;
+            let nor_path = files.nor.context("no NOR dump found in --rom-dir")?;
+            let raw = std::fs::read(&nor_path)
+                .with_context(|| format!("cannot read {}", nor_path.display()))?;
+            let swapped = block_fs_swapped(&raw);
+            let mut logical = if swapped {
+                nc1020_swap(&raw)
+            } else {
+                raw.clone()
+            };
+            let info = block_delete(&mut logical, name.as_deref(), bank)
+                .with_context(|| format!("delete `{}` failed", name.as_deref().unwrap_or("?"),))?;
+            let out_bytes = if swapped {
+                nc1020_swap(&logical)
+            } else {
+                logical
+            };
+            std::fs::write(&out, out_bytes)
+                .with_context(|| format!("cannot write {}", out.display()))?;
+            println!(
+                "[ok] deleted `{}` (banks {}..{} freed) -> {}",
+                info.name,
+                info.bank,
+                info.bank + info.banks - 1,
+                out.display()
+            );
             Ok(())
         }
         Command::Ls { model, rom_dir } => {

@@ -324,6 +324,55 @@ fn block_unswap(data: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Result of removing a file from the PC1000 / CC800 file area.
+pub struct BlockDeletion {
+    /// Name of the file that was removed.
+    pub name: String,
+    /// First bank it occupied.
+    pub bank: usize,
+    /// How many banks it occupied (now erased, so free again).
+    pub banks: usize,
+}
+
+/// Erase a file from the PC1000 / CC800 file area, freeing its banks.
+///
+/// Selecting by `--bank` matters because the stored names are raw Big5 / GB2312
+/// bytes: the firmware's own file lists show them fine, but a name typed on the
+/// command line cannot always be matched against the lossily decoded copy.
+pub fn block_delete(
+    nor: &mut [u8],
+    name: Option<&str>,
+    bank: Option<usize>,
+) -> anyhow::Result<BlockDeletion> {
+    let entries = block_entries(nor);
+    let hit = match bank {
+        Some(b) => entries.iter().find(|e| e.bank == b),
+        None => {
+            let want = name.unwrap_or_default().trim();
+            entries.iter().find(|e| e.name.eq_ignore_ascii_case(want))
+        }
+    }
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "no file matching {} in the file area (banks {BLOCK_BANK_FIRST}..={BLOCK_BANK_LAST})",
+            match (name, bank) {
+                (Some(n), _) => format!("`{n}`"),
+                (None, Some(b)) => format!("bank {b}"),
+                _ => "that".to_string(),
+            }
+        )
+    })?;
+    let start = hit.bank;
+    let count = hit.banks;
+    let first = start * BLOCK_BANK_SIZE;
+    nor[first..first + count * BLOCK_BANK_SIZE].fill(0xFF);
+    Ok(BlockDeletion {
+        name: hit.name.clone(),
+        bank: start,
+        banks: count,
+    })
+}
+
 pub fn block_is_header(bank: &[u8]) -> bool {
     bank.len() >= BLOCK_HEADER_SIZE && bank[0] == 0x40 && bank[1] == 0x00
 }
@@ -609,6 +658,34 @@ mod tests {
         assert_eq!(detected.fat_sig, [0xC0, 0x7B]);
         assert_eq!(detected.fat_const, [0x7B, 0x05]);
         assert_eq!(detected.fat_ver, [0x05, 0x00]);
+    }
+
+    #[test]
+    fn block_delete_frees_the_banks_for_reuse() {
+        let mut nor = blank_nor();
+        block_inject(&mut nor, "GAME.BIN", &[0xA9; 0x9000], None).unwrap();
+        assert_eq!(block_entries(&nor).len(), 1);
+
+        // Delete by name.
+        let info = block_delete(&mut nor, Some("GAME.BIN"), None).unwrap();
+        assert_eq!(info.bank, BLOCK_BANK_FIRST);
+        assert_eq!(info.banks, 2);
+        assert!(block_entries(&nor).is_empty());
+        // The span must be erased again so it can be reused.
+        let first = info.bank * BLOCK_BANK_SIZE;
+        assert!(nor[first..first + info.banks * BLOCK_BANK_SIZE]
+            .iter()
+            .all(|&b| b == 0xFF));
+
+        // Deleting by bank works even for names that are not ASCII-matchable.
+        block_inject(&mut nor, "GAME.BIN", &[0xA9; 16], None).unwrap();
+        let info = block_delete(&mut nor, None, Some(BLOCK_BANK_FIRST)).unwrap();
+        assert_eq!(info.bank, BLOCK_BANK_FIRST);
+        assert!(block_entries(&nor).is_empty());
+
+        // And a bogus request is an error, not a silent no-op.
+        assert!(block_delete(&mut nor, Some("NOPE"), None).is_err());
+        assert!(block_delete(&mut nor, None, Some(3)).is_err());
     }
 
     #[test]
