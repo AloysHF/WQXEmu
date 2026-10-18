@@ -540,7 +540,7 @@ mod tests {
         assert_eq!(entries[0].bank, BLOCK_BANK_FIRST);
         assert_eq!(entries[0].length, payload.len());
         assert_eq!(
-            &nor[BLOCK_BANK_FIRST * BLOCK_BANK_SIZE + BLOCK_HEADER_SIZE + 0..][..4],
+            &nor[BLOCK_BANK_FIRST * BLOCK_BANK_SIZE + BLOCK_HEADER_SIZE..][..4],
             &payload[..]
         );
     }
