@@ -221,6 +221,27 @@ impl Emulator {
                 }
             }
         }
+        // WQX_WID overrides the "write block" BRK id (0x05 in wangyu's
+        // nc1020 routine) so we can probe a firmware's id semantics.
+        if let Ok(wid) = std::env::var("WQX_WID") {
+            if let Ok(value) = u8::from_str_radix(wid.trim_start_matches("0x"), 16) {
+                for i in 0..routine.len().saturating_sub(2) {
+                    if routine[i] == 0x00 && routine[i + 2] == 0x93 && routine[i + 1] == 0x05 {
+                        routine[i + 1] = value;
+                    }
+                }
+            }
+        }
+        // WQX_CID overrides the "commit" BRK id (0x07).
+        if let Ok(cid) = std::env::var("WQX_CID") {
+            if let Ok(value) = u8::from_str_radix(cid.trim_start_matches("0x"), 16) {
+                for i in 0..routine.len().saturating_sub(2) {
+                    if routine[i] == 0x00 && routine[i + 2] == 0x93 && routine[i + 1] == 0x07 {
+                        routine[i + 1] = value;
+                    }
+                }
+            }
+        }
         for (i, &b) in routine.iter().enumerate() {
             self.machine.poke(0x3000 + i as u16, b);
         }
