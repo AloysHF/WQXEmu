@@ -307,12 +307,16 @@ impl Emulator {
         let recognized = entries
             .iter()
             .any(|e| e.name.eq_ignore_ascii_case(name.trim()));
+        let (wc, po, eo) = self.machine.flash_stats();
         log::info!(
-            "inject_file: name={} bytes_sent={} recognized={} entries={}",
+            "inject_file: name={} bytes_sent={} recognized={} entries={} flash(w={} prog={} erase={})",
             name,
             bytes_sent,
             recognized,
-            entries.len()
+            entries.len(),
+            wc,
+            po,
+            eo
         );
 
         Ok(InjectReport {
