@@ -613,8 +613,10 @@ fn main() -> Result<()> {
                     );
                     if !info.replaced {
                         println!(
-                            "     note: the file appears in the device root directory; \
-                             the NAND FAT and root entry were written directly."
+                            "     note: the file is registered in the NAND file system (FAT + \
+                             root-directory entry).  The firmware's built-in menus are hardcoded \
+                             and never list user files; the entry shows up in LAVA/file-manager \
+                             applications that browse this file system."
                         );
                     }
                 }
