@@ -128,6 +128,8 @@ enum Command {
         #[arg(long, default_value_t = false)]
         blank_nor: bool,
         /// Comma-separated hex key ids to press after boot (e.g. "0E,1A,1D").
+        /// Append `+` to hold a key down and `-` to release it, e.g.
+        /// "2E,39+,09,39-" taps F9 while SHIFT (中英数) is held.
         #[arg(long)]
         keys: Option<String>,
         /// Print the LCD framebuffer as ASCII after boot + keys.
@@ -790,9 +792,27 @@ fn main() -> Result<()> {
             }
             let before = emu.debug_nor_bytes(0, 0x100000);
             if let Some(keys) = keys {
+                // `0E` taps a key, `39+` holds it down and `39-` releases it,
+                // so shifted hotkeys (e.g. NC2000 "游戏" = SHIFT + F9) work.
                 for part in keys.split(',') {
-                    if let Ok(id) = u8::from_str_radix(part.trim(), 16) {
-                        emu.debug_press_key(id, 6);
+                    let tok = part.trim();
+                    let (tok, hold) = match tok.strip_suffix('+') {
+                        Some(t) => (t, Some(true)),
+                        None => match tok.strip_suffix('-') {
+                            Some(t) => (t, Some(false)),
+                            None => (tok, None),
+                        },
+                    };
+                    if let Ok(id) = u8::from_str_radix(tok, 16) {
+                        match hold {
+                            Some(pressed) => {
+                                emu.set_key(id, pressed);
+                                for _ in 0..4 {
+                                    emu.run_frame();
+                                }
+                            }
+                            None => emu.debug_press_key(id, 6),
+                        }
                     }
                 }
             }
