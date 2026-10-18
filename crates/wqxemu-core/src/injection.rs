@@ -533,3 +533,88 @@ mod tests {
         assert!(err.to_string().contains("no free"));
     }
 }
+
+// ---------------------------------------------------------------------------
+// NC2000 / NC3000 NAND file allocation table (read only)
+// ---------------------------------------------------------------------------
+//
+// The first NAND pages hold a table of 32-byte records, one per file:
+//
+//   +0  u16 slot           1-based, sequential across records
+//   +2  u16 flags          0x808A / 0x80AB / 0x80BA on the observed dumps
+//   +4  ..+14  header      version/signature bytes
+//   +14 u16 blocks         number of NAND pages the file occupies
+//   +16 u16 reserved
+//   +18 6 x u16            first page numbers, terminated by 0xFFFF
+//   +30 A8 A8              record trailer
+//
+// Only the first few page numbers of a file are listed here; the remaining
+// pages are reached through the per-page spare area.  File *names* are not in
+// this table, which is why NC2000/NC3000 injection is still open: adding a
+// file needs the name -> record mapping of the directory the firmware reads.
+
+/// One record of the NC2000/NC3000 NAND allocation table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NandFatEntry {
+    /// 1-based slot number stored in the record.
+    pub slot: u16,
+    /// Flags word (record bytes 2..4).
+    pub flags: u16,
+    /// Number of NAND pages the file occupies (record bytes 14..16).
+    pub blocks: u16,
+    /// First page numbers listed in the record.
+    pub pages: Vec<u16>,
+}
+
+/// NAND page size including the spare area (512 data + 16 spare).
+pub const NAND_FULL_PAGE: usize = 528;
+
+/// Parse the allocation table at the start of a NAND dump.
+///
+/// Stops at the first page that holds no valid record, and at `MAX_PAGES`
+/// pages so a corrupt image cannot run away.
+pub fn nand_fat_entries(nand: &[u8]) -> Vec<NandFatEntry> {
+    const MAX_PAGES: usize = 64;
+    let mut out = Vec::new();
+    let mut expect_slot: u16 = 1;
+    for page in 0..MAX_PAGES {
+        let base = page * NAND_FULL_PAGE;
+        if base + NAND_FULL_PAGE > nand.len() {
+            break;
+        }
+        let mut page_has_entry = false;
+        for rec in 0..(512 / 32) {
+            let off = base + rec * 32;
+            let e = &nand[off..off + 32];
+            if e[30] != 0xA8 || e[31] != 0xA8 {
+                continue;
+            }
+            let slot = u16::from(e[0]) | (u16::from(e[1]) << 8);
+            if slot != expect_slot {
+                continue;
+            }
+            let flags = u16::from(e[2]) | (u16::from(e[3]) << 8);
+            let blocks = u16::from(e[14]) | (u16::from(e[15]) << 8);
+            let mut pages = Vec::new();
+            for i in 0..6 {
+                let p = u16::from(e[18 + i * 2]) | (u16::from(e[19 + i * 2]) << 8);
+                if p == 0xFFFF {
+                    break;
+                }
+                pages.push(p);
+            }
+            out.push(NandFatEntry {
+                slot,
+                flags,
+                blocks,
+                pages,
+            });
+            expect_slot += 1;
+            page_has_entry = true;
+        }
+        if !page_has_entry {
+            break;
+        }
+    }
+    out
+}

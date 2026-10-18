@@ -10,7 +10,7 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
-use wqxemu_core::injection::{block_entries, block_inject};
+use wqxemu_core::injection::{block_entries, block_inject, nand_fat_entries};
 use wqxemu_core::{Emulator, MachineModel, RomFiles};
 
 #[derive(Parser)]
@@ -141,6 +141,13 @@ enum Command {
         /// session (debug helper; requires WQX_NORTRACE=1 for the model).
         #[arg(long, default_value_t = false)]
         nor_reads: bool,
+        /// Print which 64-byte NAND blocks the firmware read during the
+        /// session (debug helper; requires WQX_NANDTRACE=1 for the model).
+        #[arg(long, default_value_t = false)]
+        nand_reads: bool,
+        /// Save the (possibly modified) NAND image after the session.
+        #[arg(long)]
+        save_nand_out: Option<String>,
     },
 }
 
@@ -619,12 +626,34 @@ fn main() -> Result<()> {
                     }
                     Ok(())
                 }
-                _ => {
-                    bail!(
-                        "{} keeps its file system in NAND; listing is not supported yet \
-                         (nc1020/pc1000/cc800 are)",
-                        model.name()
-                    )
+                MachineModel::Nc2000 | MachineModel::Nc3000 => {
+                    let files = RomFiles::from_dir(&rom_dir)?;
+                    let nand_path = files.nand.context("no NAND dump found in --rom-dir")?;
+                    let raw = std::fs::read(&nand_path)?;
+                    let entries = nand_fat_entries(&raw);
+                    println!(
+                        "NAND allocation table for {} ({} records):",
+                        model.name(),
+                        entries.len()
+                    );
+                    for e in &entries {
+                        println!(
+                            "  slot {:3}  pages={:5}  flags=0x{:04X}  first pages: {}",
+                            e.slot,
+                            e.blocks,
+                            e.flags,
+                            e.pages
+                                .iter()
+                                .map(|p| format!("{p}"))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        );
+                    }
+                    println!(
+                        "  note: file names live outside this table, so records are listed \
+                         by slot only."
+                    );
+                    Ok(())
                 }
             }
         }
@@ -709,6 +738,8 @@ fn main() -> Result<()> {
             png,
             save_out,
             nor_reads,
+            nand_reads,
+            save_nand_out,
         } => {
             let model = resolve_model(&model)?;
             let mut emu = build_emulator(model, &rom_dir)?;
@@ -746,7 +777,7 @@ fn main() -> Result<()> {
                 .join(" ");
             let (wc, po, eo) = emu.flash_stats();
             println!(
-                "boot {} frames: {} NOR bytes changed (of {}); PC=0x{:04X} sleeping={} io06=0x{:02X} io0C=0x{:02X} flash(w={} prog={} erase={}) RAM[0x9C0..]=[{}]",
+                "boot {} frames: {} NOR bytes changed (of {}); PC=0x{:04X} sleeping={} io06=0x{:02X} io0C=0x{:02X} flash(w={} prog={} erase={}) nand_prog={} nand_w={} RAM[0x9C0..]=[{}]",
                 frames,
                 changed,
                 before.len(),
@@ -757,6 +788,8 @@ fn main() -> Result<()> {
                 wc,
                 po,
                 eo,
+                emu.nand_program_ops(),
+                emu.nand_write_calls(),
                 ram9c0
             );
             for (i, a, b) in samples {
@@ -804,6 +837,45 @@ fn main() -> Result<()> {
                         println!("  read 0x{:05X}..0x{:05X}", s0 * 64, map.len() * 64);
                     }
                 }
+            }
+            if nand_reads {
+                let map = emu.debug_nand_read_map();
+                if map.is_empty() {
+                    println!("nand-reads: model did not collect a read map");
+                } else {
+                    println!("nand-reads: {} blocks of 64B traced", map.len());
+                    let mut start: Option<usize> = None;
+                    for (i, &v) in map.iter().enumerate() {
+                        match (v != 0, start) {
+                            (true, None) => start = Some(i),
+                            (false, Some(s0)) => {
+                                println!(
+                                    "  read 0x{:06X}..0x{:06X} (page {}..{})",
+                                    s0 * 64,
+                                    i * 64,
+                                    s0 * 64 / 528,
+                                    i * 64 / 528
+                                );
+                                start = None;
+                            }
+                            _ => {}
+                        }
+                    }
+                    if let Some(s0) = start {
+                        println!(
+                            "  read 0x{:06X}..0x{:06X} (page {}..{})",
+                            s0 * 64,
+                            map.len() * 64,
+                            s0 * 64 / 528,
+                            map.len() * 64 / 528
+                        );
+                    }
+                }
+            }
+            if let Some(path) = save_nand_out {
+                emu.save_nand(&path)
+                    .with_context(|| format!("Failed to save NAND to {path}"))?;
+                println!("modified NAND saved to {path}");
             }
             if let Some(path) = save_out {
                 emu.save_nor(&path)

@@ -144,10 +144,27 @@ impl Emulator {
     /// so we never hang if a model never sleeps.
     pub fn boot_for_injection(&mut self) {
         let mut frames = 0;
-        const MAX_FRAMES: u32 = 400;
+        // NC2000/NC3000 take ~1200 frames to reach their desktop (NAND check),
+        // NC1020 sleeps after ~200, so this cap only bounds the slow models.
+        const MAX_FRAMES: u32 = 1800;
+        let boot_keys = self.machine.injection_boot_keys().to_vec();
+        let mut next_key = 0usize;
         while frames < MAX_FRAMES && !self.machine.is_sleeping() {
             self.run_frame();
             frames += 1;
+            // Some models stop at a confirmation prompt ("keep the data in
+            // flash?") before reaching their desktop; answer it for the user.
+            if next_key < boot_keys.len() && frames == 180 {
+                self.machine.set_key(boot_keys[next_key], true);
+                for _ in 0..4 {
+                    self.run_frame();
+                    frames += 1;
+                }
+                self.machine.set_key(boot_keys[next_key], false);
+                self.run_frame();
+                frames += 1;
+                next_key += 1;
+            }
         }
         log::info!(
             "Injection boot complete after {} frames (sleeping={})",
@@ -246,7 +263,23 @@ impl Emulator {
             self.machine.poke(0x3000 + i as u16, b);
         }
 
+        log::info!(
+            "pre-inject: bank_switch=0x{:02X} io0d=0x{:02X} name_addr=0x{:04X} tbl400A={:02X}{:02X}",
+            self.peek(0x00),
+            self.peek(0x0D),
+            cfg.name_addr,
+            self.peek(0x400B),
+            self.peek(0x400A)
+        );
+
+        // wangyu's `put` asserts a "warm reset" by leaving the timer counters
+        // non-zero; the firmware's syscall layer checks this before allowing
+        // file-system writes.
+        self.machine.poke(0x02, 1);
+        self.machine.poke(0x03, 1);
+
         // 6. Arm the byte bridge and divert the CPU to the pump.
+        let nand_ops_before = self.machine.nand_program_ops();
         self.machine.inject_activate(data.to_vec());
         self.cpu.pc = 0x3000;
 
@@ -254,6 +287,18 @@ impl Emulator {
             let mut trace: Vec<u16> = Vec::new();
             for _ in 0..4000u32 {
                 trace.push(self.cpu.pc);
+                if self.cpu.pc == 0xEAC2 {
+                    log::info!(
+                        "  EAC2: zpB0={:02X} zpB1={:02X} zpB2={:02X} id3f5={:02X} bank={:02X} t400A={:02X}{:02X}",
+                        self.peek(0xB0),
+                        self.peek(0xB1),
+                        self.peek(0xB2),
+                        self.peek(0x03F5),
+                        self.peek(0x00),
+                        self.peek(0x400B),
+                        self.peek(0x400A)
+                    );
+                }
                 self.machine.step(&mut self.cpu);
                 if !self.machine.inject_active() {
                     break;
@@ -304,19 +349,25 @@ impl Emulator {
         self.reset();
         self.boot_for_injection();
         let entries = self.machine.gffs_entries();
-        let recognized = entries
+        let in_directory = entries
             .iter()
             .any(|e| e.name.eq_ignore_ascii_case(name.trim()));
+        // Models whose file system lives in NAND (nc2000/nc3000) have no NOR
+        // directory to re-read, so fall back to "the firmware programmed NAND
+        // while we pumped the file in".
+        let nand_written = self.machine.nand_program_ops() > nand_ops_before;
+        let recognized = in_directory || (entries.is_empty() && nand_written);
         let (wc, po, eo) = self.machine.flash_stats();
         log::info!(
-            "inject_file: name={} bytes_sent={} recognized={} entries={} flash(w={} prog={} erase={})",
+            "inject_file: name={} bytes_sent={} recognized={} entries={} flash(w={} prog={} erase={}) nand_prog={}",
             name,
             bytes_sent,
             recognized,
             entries.len(),
             wc,
             po,
-            eo
+            eo,
+            self.machine.nand_program_ops() - nand_ops_before
         );
 
         Ok(InjectReport {
@@ -342,6 +393,26 @@ impl Emulator {
     /// Debug helper: per-64-byte NOR read map (1 = block read since boot).
     pub fn debug_nor_read_map(&self) -> Vec<u8> {
         self.machine.debug_nor_read_map()
+    }
+
+    /// Number of NAND program operations since power-on.
+    pub fn nand_program_ops(&self) -> u32 {
+        self.machine.nand_program_ops()
+    }
+
+    /// Number of byte writes to the NAND data register since power-on.
+    pub fn nand_write_calls(&self) -> u32 {
+        self.machine.nand_write_calls()
+    }
+
+    /// Debug helper: per-64-byte NAND read map (1 = block read since boot).
+    pub fn debug_nand_read_map(&self) -> Vec<u8> {
+        self.machine.debug_nand_read_map()
+    }
+
+    /// Debug helper: copy a window of the NAND image.
+    pub fn debug_nand_bytes(&self, off: usize, len: usize) -> Vec<u8> {
+        self.machine.debug_nand_window(off, len)
     }
 
     /// Debug helper: fill the whole NOR image with `val` (e.g. 0xFF for a

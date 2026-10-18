@@ -15,6 +15,7 @@ use serde_big_array::BigArray;
 
 use crate::audio::Audio;
 use crate::cpu::{Cpu, CpuBus};
+use crate::injection::InjectionBridge;
 use crate::lcd::Lcd;
 use crate::machine::{Machine, MachineModel, RomFiles};
 use crate::save::SaveState;
@@ -145,6 +146,18 @@ pub struct Nc3000Machine {
     nand_addr: Vec<u8>,
     nand_data: Vec<u8>,
     nand_read_cnt: usize,
+    /// Host-side bridge feeding the firmware's 0x3FFF file-injection pump.
+    #[serde(skip)]
+    injection: InjectionBridge,
+    /// Number of NAND program operations (debug / validation).
+    #[serde(skip)]
+    nand_prog_ops: u32,
+    /// Number of byte writes to the NAND data register (debug).
+    #[serde(skip)]
+    nand_write_calls: u32,
+    /// Debug: per-64-byte NAND read map (only with WQX_NANDTRACE=1).
+    #[serde(skip)]
+    nand_read_map: Option<Vec<u8>>,
 
     // Keypad / ports
     keypad_matrix: [[bool; 8]; 8],
@@ -220,6 +233,10 @@ impl Nc3000Machine {
             nand_addr: Vec::new(),
             nand_data: Vec::new(),
             nand_read_cnt: 0,
+            injection: InjectionBridge::new(),
+            nand_prog_ops: 0,
+            nand_write_calls: 0,
+            nand_read_map: None,
             keypad_matrix: [[false; 8]; 8],
             w08_port0_ol: 0,
             r08_port0_id: 0,
@@ -264,6 +281,9 @@ impl Nc3000Machine {
         };
 
         machine.load_rom(files)?;
+        if std::env::var_os("WQX_NANDTRACE").is_some() {
+            machine.nand_read_map = Some(vec![0u8; machine.nand.len().div_ceil(64)]);
+        }
         Ok(machine)
     }
 
@@ -447,6 +467,14 @@ impl Nc3000Machine {
 
     /// Execute a CPU read (with NOR command side effects).
     fn bus_read(&mut self, addr: u16) -> u8 {
+        // Magic injection port: while the GFFS pump is active the firmware
+        // reads file bytes from 0x3FFF.  Intercept those reads so the host can
+        // feed the file without touching real hardware.
+        if addr == 0x3FFF {
+            if let Some(value) = self.injection.read(addr) {
+                return value;
+            }
+        }
         if (addr as usize) < 0x40 {
             return self.io_read(addr as u8);
         }
@@ -621,10 +649,15 @@ impl Nc3000Machine {
                         self.nand_read_cnt += 1;
                         self.clear_nand_status();
                     }
-                0x80
-                    if !self.nand_cmd.is_empty() => {
-                        self.nand_cmd.push(value);
+                0x80 => {
+                    // Serial data input (0x80 -> address -> data -> 0x10).
+                    // A preceding 0x00 / 0x50 selects the main / spare area,
+                    // but 0x80 may also start the sequence by itself.
+                    if self.nand_cmd.len() >= 2 {
+                        self.nand_cmd.truncate(1);
                     }
+                    self.nand_cmd.push(value);
+                }
                 _ => {}
             }
             return;
@@ -645,16 +678,20 @@ impl Nc3000Machine {
 
     /// Program a page (0x80 ... data ... 0x10).
     fn nand_program(&mut self) {
-        if self.nand_cmd.len() < 2 || self.nand_addr.len() != 4 {
+        if self.nand_cmd.is_empty() || self.nand_addr.len() != 4 {
             return;
         }
+        // The area is chosen by a preceding 0x00 (main) or 0x50 (spare);
+        // a sequence that starts with 0x80 writes the main area.
+        let spare = self.nand_cmd.contains(&0x50);
+        self.nand_prog_ops = self.nand_prog_ops.saturating_add(1);
         let low = self.nand_addr[0] as usize;
         let mid = self.nand_addr[1] as usize;
         let high = self.nand_addr[2] as usize;
         let a25 = (self.nand_addr[3] & 0x01) as usize;
         let page = a25 * 256 * 256 + high * 256 + mid;
 
-        if self.nand_cmd[0] == 0x50 {
+        if spare {
             // Spare area program (16 bytes)
             if self.nand_data.len() == 16 {
                 let final_off = page * NAND_PAGE_SIZE + low + 512;
@@ -665,7 +702,7 @@ impl Nc3000Machine {
                     }
                 }
             }
-        } else if self.nand_cmd[0] == 0x00 && self.nand_data.len() == NAND_PAGE_SIZE {
+        } else if !spare && self.nand_data.len() == NAND_PAGE_SIZE {
             let final_off = page * NAND_PAGE_SIZE + low;
             for (i, &b) in self.nand_data.iter().enumerate() {
                 let idx = final_off + i;
@@ -720,6 +757,11 @@ impl Nc3000Machine {
             let idx = page * NAND_PAGE_SIZE + col + self.nand_read_cnt;
             self.nand_read_cnt += 1;
             return if idx < self.nand.len() {
+                if let Some(map) = self.nand_read_map.as_mut() {
+                    if let Some(slot) = map.get_mut(idx / 64) {
+                        *slot = 1;
+                    }
+                }
                 self.nand[idx]
             } else {
                 0xFF
@@ -1422,6 +1464,66 @@ enum MemTarget {
 impl Machine for Nc3000Machine {
     fn model(&self) -> MachineModel {
         MachineModel::Nc3000
+    }
+
+    fn save_nand(&self, path: &std::path::Path) -> Result<()> {
+        // The standalone dump starts at NAND page `NAND0_PAGES` (the first 64
+        // pages live in the separate `nand0` plane), so write the main plane
+        // followed by `NAND0_PAGES` blank pages to keep the original size and
+        // page alignment.
+        let start = NAND0_PAGES * NAND_PAGE_SIZE;
+        std::fs::write(path, &self.nand[start..])
+            .with_context(|| format!("Failed to write NAND file: {}", path.display()))?;
+        log::info!("NAND Flash saved: {}", path.display());
+        Ok(())
+    }
+
+    fn poke(&mut self, addr: u16, val: u8) {
+        if (addr as usize) < 0x40 {
+            self.io[addr as usize] = val;
+            return;
+        }
+        if let Some(MemTarget::Ram(o)) = self.map_read(addr) {
+            self.ram[o] = val;
+        }
+    }
+
+    fn inject_activate(&mut self, data: Vec<u8>) {
+        self.injection.start(data);
+    }
+
+    fn inject_active(&self) -> bool {
+        self.injection.is_active()
+    }
+
+    fn inject_bytes_sent(&self) -> usize {
+        self.injection.bytes_sent
+    }
+
+    fn injection_boot_keys(&self) -> &'static [u8] {
+        // Matrix key 0x2E = "N" -> keep the data already in flash.
+        &[0x2E]
+    }
+
+    fn nand_program_ops(&self) -> u32 {
+        self.nand_prog_ops
+    }
+
+    fn nand_write_calls(&self) -> u32 {
+        self.nand_write_calls
+    }
+
+    fn debug_nand_window(&self, off: usize, len: usize) -> Vec<u8> {
+        let end = (off + len).min(self.nand.len());
+        if off < end {
+            self.nand[off..end].to_vec()
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn debug_nand_read_map(&self) -> Vec<u8> {
+        self.nand_read_map.clone().unwrap_or_default()
     }
 
     fn reset(&mut self) {

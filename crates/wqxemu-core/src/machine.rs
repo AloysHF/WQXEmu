@@ -374,6 +374,33 @@ pub trait Machine: Send {
         Vec::new()
     }
 
+    /// Keys the injection bootstrap must press once the firmware has booted
+    /// far enough (e.g. the NC2000/NC3000 ask whether to keep the data that is
+    /// already in flash before they reach the desktop).
+    fn injection_boot_keys(&self) -> &'static [u8] {
+        &[]
+    }
+
+    /// Debug: number of byte writes to the NAND data register.
+    fn nand_write_calls(&self) -> u32 {
+        0
+    }
+
+    /// Debug/validation: number of NAND program operations since power-on.
+    fn nand_program_ops(&self) -> u32 {
+        0
+    }
+
+    /// Debug helper: copy `len` bytes of the NAND image starting at `off`.
+    fn debug_nand_window(&self, _off: usize, _len: usize) -> Vec<u8> {
+        Vec::new()
+    }
+
+    /// Debug helper: per-64-byte NAND read map (1 = block was read since boot).
+    fn debug_nand_read_map(&self) -> Vec<u8> {
+        Vec::new()
+    }
+
     /// Debug helper: per-64-byte NOR read map (1 = block was read since boot).
     /// Empty unless the model implements it and tracing was enabled.
     fn debug_nor_read_map(&self) -> Vec<u8> {
