@@ -2,7 +2,7 @@
 //
 // Injects `.bin` / `.bas` game files into a Wenquxing firmware image by
 // driving the firmware's own file-system syscalls through the same 0x3FFF
-// pump protocol that wangyu's `put` command uses, but entirely offline and
+// pump protocol used for interactive file transfer, but entirely offline and
 // without ever writing to the source firmware directory (`tmp/roms`).
 //
 // The modified flash is written only to the user-supplied `--out` path.

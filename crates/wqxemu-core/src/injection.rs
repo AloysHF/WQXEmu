@@ -3,7 +3,7 @@
 // Wenquxing devices store user files in a private NOR/NAND file system that
 // the firmware only exposes through a handful of "syscalls" dispatched via the
 // 6502 BRK instruction (a 3-byte instruction: `BRK <id> <signature>`). The
-// reference tool `wangyu-NC2000` drives these syscalls by placing a tiny 6502
+// A host-side driver can use these syscalls by placing a tiny 6502
 // "pump" routine at 0x3000 that reads file bytes from the magic IO port
 // 0x3FFF (one `1` ready byte followed by one data byte, terminating with a
 // `0`) and feeds them to the firmware's write-block syscall.
@@ -19,7 +19,7 @@ use crate::machine::MachineModel;
 
 /// Reads performed by the 0x3000 pump routine against the magic port 0x3FFF.
 ///
-/// Protocol (matches `dummy_io_for_read` in wangyu's `cmd.cpp`):
+/// Protocol (the host-side reader that feeds the pump):
 /// the host returns `1` on even reads and the next queued byte on odd reads;
 /// when the queue is empty the next read returns `0` to signal end-of-file.
 #[derive(Default)]
@@ -147,7 +147,9 @@ pub struct InjectConfig {
     pub pump_cycles: u64,
 }
 
-// nc1020 (non-Taiwan) pump routine, copied verbatim from wangyu's `cmd.cpp`.
+// nc1020 (non-Taiwan) pump routine.  This 6502 stub is derived from the
+// reference file-transfer implementation of another GPL-3.0 emulator and is
+// redistributed under the same GPL-3.0 terms as the rest of WQXEmu (LICENSE).
 static NC1020_PUT_ROUTINE: &[u8] = &[
     0xea, 0xea, 0xea, 0x00, 0x01, 0x93, 0xA9, 0x00, 0x8D, 0x6E, 0x04, 0x8D, 0xAE, 0x04, 0xAD, 0xFF,
     0x3F, 0xC9, 0x00, 0xF0, 0x20, 0xAD, 0xFF, 0x3F, 0x8D, 0x00, 0x32, 0xA9, 0x00, 0x8D, 0x0D, 0x12,

@@ -137,8 +137,8 @@ impl Emulator {
     }
 
     /// Boot the firmware far enough that its BRK syscall dispatcher and the
-    /// GFFS file system are initialised. wangyu's `put` relies on the firmware
-    /// already being up (its emulator runs continuously); for an offline
+    /// GFFS file system are initialised. Interactive file transfer relies on
+    /// the firmware already being up (the emulator runs continuously); for an offline
     /// batch injection we have to run the boot ourselves before diverting the
     /// CPU to the pump routine at 0x3000.
     ///
@@ -185,7 +185,7 @@ impl Emulator {
     /// by driving the firmware's own GFFS write syscalls through the 0x3FFF
     /// pump protocol.
     ///
-    /// This is an offline re-implementation of wangyu's `put` command: it
+    /// This is an offline re-implementation of the interactive transfer flow: it
     /// boots the firmware, stages the file name / parameters and the pump
     /// routine in RAM, diverts the CPU to the pump at 0x3000, and feeds the
     /// file bytes through the magic 0x3FFF IO port until the firmware commits
@@ -246,8 +246,8 @@ impl Emulator {
                 }
             }
         }
-        // WQX_WID overrides the "write block" BRK id (0x05 in wangyu's
-        // nc1020 routine) so we can probe a firmware's id semantics.
+        // WQX_WID overrides the "write block" BRK id (0x05 on nc1020) so we
+        // can probe a firmware's id semantics.
         if let Ok(wid) = std::env::var("WQX_WID") {
             if let Ok(value) = u8::from_str_radix(wid.trim_start_matches("0x"), 16) {
                 for i in 0..routine.len().saturating_sub(2) {
@@ -280,7 +280,7 @@ impl Emulator {
             self.peek(0x400A)
         );
 
-        // wangyu's `put` asserts a "warm reset" by leaving the timer counters
+        // The interactive transfer path asserts a "warm reset" by leaving the timer counters
         // non-zero; the firmware's syscall layer checks this before allowing
         // file-system writes.
         self.machine.poke(0x02, 1);
