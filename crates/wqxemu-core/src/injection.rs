@@ -618,3 +618,91 @@ pub fn nand_fat_entries(nand: &[u8]) -> Vec<NandFatEntry> {
     }
     out
 }
+
+/// A directory entry of the NC2000/NC3000 NAND file system.
+///
+/// Directories are ordinary NAND pages made of 16-byte records living in the
+/// pages owned by their slot:
+///
+///   +0  u16   slot of the child entry (0 = ".", 1 = "..")
+///   +2  char  name, NUL terminated, GB2312 or ASCII
+///
+/// The root directory of the observed dumps sits in NAND page 31 and lists
+/// `..`, `sysdir`, and one entry per sub directory ("应用程序", "文本文件", ...).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NandDirEntry {
+    /// NAND page the entry was read from.
+    pub page: usize,
+    /// Child slot number.
+    pub slot: u16,
+    /// Raw name bytes (GB2312 / ASCII, NUL trimmed).
+    pub name: Vec<u8>,
+}
+
+/// Render a directory name for display: ASCII stays as-is, anything else is
+/// escaped as `\xNN` (there is no GB2312 table in the crate).
+pub fn nand_name_to_string(raw: &[u8]) -> String {
+    let mut s = String::new();
+    for &b in raw {
+        if (0x20..0x7F).contains(&b) {
+            s.push(b as char);
+        } else {
+            s.push_str(&format!("\\x{b:02X}"));
+        }
+    }
+    s
+}
+
+/// Find directory pages in a NAND dump.
+///
+/// A page qualifies when most of its non-empty 16-byte records parse as a
+/// NUL-terminated name.  Requiring a high parse ratio keeps glyph pages (which
+/// have a similar byte shape) from being mistaken for directories.
+pub fn nand_directories(nand: &[u8], min_entries: usize) -> Vec<NandDirEntry> {
+    let mut out = Vec::new();
+    for page in 0..nand.len() / NAND_FULL_PAGE {
+        let base = page * NAND_FULL_PAGE;
+        let data = &nand[base..base + 512];
+        if data.iter().filter(|&&b| b == 0xFF).count() > 480 {
+            continue;
+        }
+        let mut page_entries: Vec<NandDirEntry> = Vec::new();
+        let mut non_empty = 0usize;
+        let mut parsed = 0usize;
+        for rec in 0..(512 / 16) {
+            let off = rec * 16;
+            let e = &data[off..off + 16];
+            if e.iter().all(|&b| b == 0xFF) {
+                continue;
+            }
+            non_empty += 1;
+            let name = &e[2..16];
+            let Some(nul) = name.iter().position(|&b| b == 0) else {
+                continue;
+            };
+            if nul == 0 || nul > 13 {
+                continue;
+            }
+            let raw = &name[..nul];
+            let printable = raw
+                .iter()
+                .all(|&b| (0x20..0x7F).contains(&b) || (0xA1..=0xFE).contains(&b));
+            if !printable {
+                continue;
+            }
+            if name[nul..].iter().any(|&b| b != 0 && b != 0xFF) {
+                continue;
+            }
+            parsed += 1;
+            page_entries.push(NandDirEntry {
+                page,
+                slot: u16::from(e[0]) | (u16::from(e[1]) << 8),
+                name: raw.to_vec(),
+            });
+        }
+        if page_entries.len() >= min_entries && parsed * 2 >= non_empty.max(1) {
+            out.append(&mut page_entries);
+        }
+    }
+    out
+}

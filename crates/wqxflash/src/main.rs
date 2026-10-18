@@ -10,7 +10,9 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
-use wqxemu_core::injection::{block_entries, block_inject, nand_fat_entries};
+use wqxemu_core::injection::{
+    block_entries, block_inject, nand_directories, nand_fat_entries, nand_name_to_string,
+};
 use wqxemu_core::{Emulator, MachineModel, RomFiles};
 
 #[derive(Parser)]
@@ -649,10 +651,41 @@ fn main() -> Result<()> {
                                 .join(", ")
                         );
                     }
-                    println!(
-                        "  note: file names live outside this table, so records are listed \
-                         by slot only."
-                    );
+                    // Directory entries name the allocation-table slots, so
+                    // join the two to print real file names.
+                    let dirs = nand_directories(&raw, 2);
+                    let mut names: std::collections::HashMap<u16, String> =
+                        std::collections::HashMap::new();
+                    for d in &dirs {
+                        names.insert(d.slot, nand_name_to_string(&d.name));
+                    }
+                    if !dirs.is_empty() {
+                        println!();
+                        for e in &entries {
+                            let name = names
+                                .get(&e.slot)
+                                .cloned()
+                                .unwrap_or_else(|| "?".to_string());
+                            println!(
+                                "  slot {:3}  pages={:5}  {:<16}  first pages: {}",
+                                e.slot,
+                                e.blocks,
+                                name,
+                                e.pages
+                                    .iter()
+                                    .map(|p| format!("{p}"))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            );
+                        }
+                        println!(
+                            "\n  directory pages found: {}  (names without a slot are unused)",
+                            dirs.iter()
+                                .map(|d| d.page)
+                                .collect::<std::collections::BTreeSet<_>>()
+                                .len()
+                        );
+                    }
                     Ok(())
                 }
             }
@@ -667,27 +700,33 @@ fn main() -> Result<()> {
             for _ in 0..frames {
                 emu.run_frame();
             }
-            // XRGB: ink (black) = 0xFF000000, background (white) = 0xFFFFFFFF.
-            let ink = |emu: &Emulator| {
-                emu.framebuffer()
-                    .iter()
-                    .filter(|&&p| p == 0xFF00_0000)
-                    .count()
+            // Compare a hash of the framebuffer so that screens with the same
+            // amount of ink but different content are still detected.
+            let fb_hash = |emu: &Emulator| {
+                let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+                for p in emu.framebuffer() {
+                    h ^= u64::from(p);
+                    h = h.wrapping_mul(0x0100_0000_01b3);
+                }
+                h
             };
-            let mut prev = ink(&emu);
-            println!("baseline ink pixels: {prev}");
+            let baseline = fb_hash(&emu);
+            println!("baseline framebuffer hash: 0x{baseline:016X}");
             for id in 0u8..0x40 {
-                emu.debug_press_key(id, 4);
-                for _ in 0..4 {
+                // Fresh-ish state: press, hold long enough for a slow scan, then
+                // let the UI settle before sampling.
+                emu.debug_press_key(id, 8);
+                for _ in 0..12 {
                     emu.run_frame();
                 }
-                let now = ink(&emu);
-                if now != prev {
-                    println!(
-                        "key 0x{id:02X}: ink {prev} -> {now}  (delta {:+})",
-                        now as i64 - prev as i64
-                    );
-                    prev = now;
+                let now = fb_hash(&emu);
+                if now != baseline {
+                    println!("key 0x{id:02X}: screen CHANGED");
+                }
+                // Return to the desktop between probes.
+                emu.debug_press_key(0x2E, 4);
+                for _ in 0..8 {
+                    emu.run_frame();
                 }
             }
             Ok(())
