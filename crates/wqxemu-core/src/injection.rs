@@ -785,20 +785,28 @@ mod tests {
         let before = nand_fat_entries(&nand, &params);
         assert_eq!(before.len(), 94, "NC3000 dump should expose 94 slots");
 
-        // FAT page numbers are 16-bit, so a file has to fit in the first
-        // 65536 pages.  This dump's first plane is completely occupied, so
-        // allocation must refuse with a clear error rather than write a page
-        // number that would silently truncate (e.g. 101857 -> 36321).
+        // The FAT only owns 3598 of the first 65536 pages here, but none of the
+        // remaining ones is erased, so allocation has to fall back to "no file
+        // owns it" (page 3636, just past the last file) instead of demanding
+        // 0xFF.  The page number must still fit in 16 bits.
         let data = vec![0x42; 1024];
-        let err = nand_inject(&mut nand, &params, "GAME.BIN", &data, None).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("65536") || msg.contains("16-bit"),
-            "unexpected error: {msg}"
-        );
-        // Nothing may have been written.
+        let info = nand_inject(&mut nand, &params, "GAME.BIN", &data, None).unwrap();
+        assert_eq!(info.slot, 95);
+        assert!(info.start_page + info.pages <= 0x10000, "16-bit pages");
         let after = nand_fat_entries(&nand, &params);
-        assert_eq!(after.len(), 94);
+        assert_eq!(after.len(), 95);
+        for b in &before {
+            let a = after.iter().find(|e| e.slot == b.slot).unwrap();
+            assert_eq!(a.blocks, b.blocks);
+            assert_eq!(a.pages, b.pages);
+        }
+        let rec = after.iter().find(|e| e.slot == 95).unwrap();
+        assert_eq!(rec.blocks as usize, info.pages);
+        assert_eq!(rec.flags, nand_flags::APPLICATION);
+        let root = nand_root_entries(&nand, &params);
+        assert!(root
+            .iter()
+            .any(|e| e.slot == 95 && nand_name_to_string(&e.name) == "GAME.BIN"));
     }
 }
 
@@ -1183,7 +1191,21 @@ fn nand_reserved_pages(nand: &[u8], params: &NandFsParams) -> std::collections::
 
 /// Find `count` consecutive, fully-blank (0xFF) NAND pages above the highest
 /// used page.  Returns the logical (main-plane) start page, or `None`.
-fn nand_find_free_pages(nand: &[u8], params: &NandFsParams, count: usize) -> Option<usize> {
+/// Find `count` consecutive pages that no file owns.
+///
+/// Scanning starts just past the highest page any FAT record refers to, which
+/// is past the end of every file span, so anything found there cannot belong to
+/// a file.  With `require_blank` only already-erased (0xFF) pages qualify; when
+/// it is false, pages holding stale data are accepted too and the caller erases
+/// them before programming — that is what real hardware does, and it is the only
+/// way to use an image whose free area was never erased (the NC3000 dumps: the
+/// FAT only owns 3598 of the first 65536 pages, yet none of the rest is 0xFF).
+fn nand_find_free_pages(
+    nand: &[u8],
+    params: &NandFsParams,
+    count: usize,
+    require_blank: bool,
+) -> Option<usize> {
     let reserved = nand_reserved_pages(nand, params);
     let total = nand.len() / NAND_FULL_PAGE;
     // FAT records store their page numbers as u16, so a file must live below
@@ -1206,7 +1228,7 @@ fn nand_find_free_pages(nand: &[u8], params: &NandFsParams, count: usize) -> Opt
             continue;
         }
         let seg = &nand[ap * NAND_FULL_PAGE..ap * NAND_FULL_PAGE + NAND_FULL_PAGE];
-        if seg.iter().all(|&b| b == 0xFF) {
+        if !require_blank || seg.iter().all(|&b| b == 0xFF) {
             if start.is_none() {
                 start = Some(lp);
             }
@@ -1482,23 +1504,24 @@ pub fn nand_inject(
     // Allocate a contiguous run of fresh data pages.  FAT records address pages
     // with 16 bits, so only the first 65536 pages (plane 0) are usable; when
     // that region is full we refuse rather than write a truncated page number.
-    let start_logical = nand_find_free_pages(nand, params, n_pages).ok_or_else(|| {
-        anyhow::anyhow!(
-            "no {n_pages} contiguous blank NAND pages below page 65536; the FAT \
-             stores 16-bit page numbers, so files must fit in the first plane"
-        )
-    })?;
+    let start_logical = nand_find_free_pages(nand, params, n_pages, true)
+        .or_else(|| nand_find_free_pages(nand, params, n_pages, false))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no {n_pages} contiguous NAND pages available below page 65536; the FAT \
+                 stores 16-bit page numbers, so files must fit in the first plane"
+            )
+        })?;
 
-    // Write the data pages (512 B each; the last page is padded with 0xFF).
+    // Erase the pages, then program them (512 B each; the tail is padded with
+    // 0xFF).  The erase matters when reusing pages that still hold stale data.
     for i in 0..n_pages {
         let ap = params.abs_page(start_logical + i);
         let s = ap * NAND_FULL_PAGE;
+        nand[s..s + NAND_FULL_PAGE].fill(0xFF);
         let end = ((i + 1) * 512).min(data.len());
         let chunk = &data[i * 512..end];
         nand[s..s + chunk.len()].copy_from_slice(chunk);
-        for b in nand[s + chunk.len()..s + 512].iter_mut() {
-            *b = 0xFF;
-        }
         // Spare area: mark the page as a written data page (mirrors the dumps).
         nand[s + 512 + 10] = 0xAA;
         nand[s + 512 + 11] = 0x00;
