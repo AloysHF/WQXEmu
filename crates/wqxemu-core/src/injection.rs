@@ -637,6 +637,46 @@ mod tests {
             .iter()
             .any(|e| e.slot == 29 && nand_name_to_string(&e.name) == "GAME.BIN"));
     }
+
+    /// NC3000 uses the same record layout as the NC2000 but a different FAT
+    /// signature (`C0 7A` / `7A 08`).  Guard against regressing to the NC2000
+    /// signature, which silently parses to zero records.
+    #[test]
+    fn nand_inject_preserves_existing_nc3000_records() {
+        let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default();
+        let candidates = [
+            format!("{manifest}/../../tmp/roms/nc3000/nc3000.nand"),
+            "tmp/roms/nc3000/nc3000.nand".to_string(),
+        ];
+        let Some(raw) = candidates.iter().find_map(|p| std::fs::read(p).ok()) else {
+            return;
+        };
+        let mut nand = raw.clone();
+        let params = NandFsParams::for_raw(MachineModel::Nc3000).unwrap();
+        // The NC3000 signature must differ from the NC2000 one.
+        assert_eq!(params.fat_sig, [0xC0, 0x7A]);
+        assert_eq!(params.fat_const, [0x7A, 0x08]);
+
+        let before = nand_fat_entries(&nand, &params);
+        assert_eq!(before.len(), 94, "NC3000 dump should expose 94 slots");
+
+        let data = vec![0x42; 1024];
+        let info = nand_inject(&mut nand, &params, "GAME.BIN", &data, None).unwrap();
+        assert_eq!(info.slot, 95);
+        let after = nand_fat_entries(&nand, &params);
+        assert_eq!(after.len(), 95);
+        for b in &before {
+            let a = after.iter().find(|e| e.slot == b.slot).unwrap();
+            assert_eq!(a.blocks, b.blocks);
+            assert_eq!(a.pages, b.pages);
+        }
+        let rec = after.iter().find(|e| e.slot == 95).unwrap();
+        assert_eq!(rec.blocks as usize, info.pages);
+        let root = nand_root_entries(&nand, &params);
+        assert!(root
+            .iter()
+            .any(|e| e.slot == 95 && nand_name_to_string(&e.name) == "GAME.BIN"));
+    }
 }
 
 // ---------------------------------------------------------------------------
