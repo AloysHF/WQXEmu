@@ -301,15 +301,20 @@ fn main() -> Result<()> {
                     }
                 }
             }
+            let ram9c0: String = (0u16..16)
+                .map(|i| format!("{:02X}", emu.peek(0x9C0 + i)))
+                .collect::<Vec<_>>()
+                .join(" ");
             println!(
-                "boot {} frames: {} NOR bytes changed (of {}); PC=0x{:04X} sleeping={} io06=0x{:02X} io0C=0x{:02X}",
+                "boot {} frames: {} NOR bytes changed (of {}); PC=0x{:04X} sleeping={} io06=0x{:02X} io0C=0x{:02X} RAM[0x9C0..]=[{}]",
                 frames,
                 changed,
                 before.len(),
                 emu.pc(),
                 emu.is_sleeping(),
                 emu.peek(0x06),
-                emu.peek(0x0C)
+                emu.peek(0x0C),
+                ram9c0
             );
             for (i, a, b) in samples {
                 println!("  [0x{i:05X}] {a:02X} -> {b:02X}");
