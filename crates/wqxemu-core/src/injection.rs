@@ -195,3 +195,253 @@ pub fn inject_config(model: MachineModel) -> Option<InjectConfig> {
         MachineModel::Pc1000 | MachineModel::Cc800 => None,
     }
 }
+
+// ---------------------------------------------------------------------------
+// PC1000 / CC800 block file system
+// ---------------------------------------------------------------------------
+//
+// Both models keep their user files in the 512 KB NOR as whole 32 KB banks,
+// starting at bank 2.  Every file begins with a 24-byte header:
+//
+//   +0   40 00              header magic ("normal file")
+//   +2   name[16]           space padded, ASCII or WQX-internal Chinese
+//   +18  00 00 00 00 00 xx  attributes (xx = 0 for applications/games)
+//   +24  payload            the `.bin` image, which itself starts with
+//                           `4C lo hi A5 AA 55` (JMP entry; magic)
+//
+// A file can span several consecutive banks; only its first bank carries the
+// header.  The firmware builds its file lists by scanning the start of every
+// bank in 2..=13 for the `40 00` magic, so a new file only needs a free run of
+// fully-blank (0xFF) banks in that range.
+
+/// Size of one NOR bank on the PC1000/CC800 (32 KB).
+pub const BLOCK_BANK_SIZE: usize = 0x8000;
+/// First bank index that can hold a user file.
+pub const BLOCK_BANK_FIRST: usize = 2;
+/// Last bank index that the firmware scans for file headers (inclusive).
+pub const BLOCK_BANK_LAST: usize = 13;
+/// Size of the per-file header that precedes the payload.
+pub const BLOCK_HEADER_SIZE: usize = 24;
+
+/// One file of the PC1000/CC800 block file system.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockEntry {
+    /// Stored (space-trimmed) file name, raw bytes decoded lossily.
+    pub name: String,
+    /// First bank holding the file.
+    pub bank: usize,
+    /// Number of banks the file occupies.
+    pub banks: usize,
+    /// Payload length in bytes (without the 24-byte header).
+    pub length: usize,
+    /// Attribute byte at header offset 23.
+    pub attr: u8,
+}
+
+/// True when `bank` (a 32 KB slice) starts with a PC1000/CC800 file header.
+pub fn block_is_header(bank: &[u8]) -> bool {
+    bank.len() >= BLOCK_HEADER_SIZE && bank[0] == 0x40 && bank[1] == 0x00
+}
+
+fn block_is_blank(bank: &[u8]) -> bool {
+    bank.iter().all(|&b| b == 0xFF)
+}
+
+/// Enumerate the files of the PC1000/CC800 block file system in a *logical*
+/// (half-swap undone) NOR image.
+pub fn block_entries(nor: &[u8]) -> Vec<BlockEntry> {
+    let mut entries = Vec::new();
+    let mut bank = BLOCK_BANK_FIRST;
+    while bank <= BLOCK_BANK_LAST {
+        let base = bank * BLOCK_BANK_SIZE;
+        if base + BLOCK_BANK_SIZE > nor.len() {
+            break;
+        }
+        if !block_is_header(&nor[base..base + BLOCK_BANK_SIZE]) {
+            bank += 1;
+            continue;
+        }
+        let raw_name = &nor[base + 2..base + 18];
+        let name = block_decode_name(raw_name);
+        // Count the contiguous banks that belong to this file: everything up
+        // to the next header or the first completely blank bank.
+        let mut banks = 1usize;
+        while bank + banks <= BLOCK_BANK_LAST {
+            let next = (bank + banks) * BLOCK_BANK_SIZE;
+            if next + BLOCK_BANK_SIZE > nor.len() {
+                break;
+            }
+            let slice = &nor[next..next + BLOCK_BANK_SIZE];
+            if block_is_header(slice) || block_is_blank(slice) {
+                break;
+            }
+            banks += 1;
+        }
+        let payload = &nor[base + BLOCK_HEADER_SIZE..base + banks * BLOCK_BANK_SIZE];
+        let length = payload
+            .iter()
+            .rposition(|&b| b != 0xFF)
+            .map(|p| p + 1)
+            .unwrap_or(0);
+        entries.push(BlockEntry {
+            name,
+            bank,
+            banks,
+            length,
+            attr: nor[base + 23],
+        });
+        bank += banks;
+    }
+    entries
+}
+
+/// Decode the 16-byte name field.  ASCII bytes are kept as-is; the WQX
+/// internal Chinese encoding (see `block_encode_name`) is rendered as `\xNN`
+/// so that names stay comparable and unambiguous.
+fn block_decode_name(raw: &[u8]) -> String {
+    let mut out = String::new();
+    for &b in raw {
+        if b == 0x20 || b == 0x00 {
+            if !out.is_empty() && !out.ends_with(' ') {
+                out.push(' ');
+            }
+        } else if (0x21..0x7F).contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("\\x{b:02X}"));
+        }
+    }
+    out.trim().to_string()
+}
+
+/// Encode a file name into the 16-byte, space-padded on-disk field.
+fn block_encode_name(name: &str) -> [u8; 16] {
+    let mut out = [b' '; 16];
+    for (dst, src) in out.iter_mut().zip(name.bytes()) {
+        *dst = if src.is_ascii() && src >= 0x20 {
+            src
+        } else {
+            b'?'
+        };
+    }
+    out
+}
+
+/// Result of an injection into the block file system.
+#[derive(Debug, Clone)]
+pub struct BlockInjection {
+    /// Bank the file was written to.
+    pub bank: usize,
+    /// Number of banks it occupies.
+    pub banks: usize,
+    /// True when an existing file was overwritten in place.
+    pub replaced: bool,
+}
+
+/// Add or update a file in the PC1000/CC800 block file system.
+///
+/// * `replace` – when set, the file with this (case-insensitive) name is
+///   removed first, and its banks are reused even if the new file is larger.
+/// * Otherwise the first free run of blank banks inside 2..=13 is used.
+pub fn block_inject(
+    nor: &mut [u8],
+    name: &str,
+    data: &[u8],
+    replace: Option<&str>,
+) -> anyhow::Result<BlockInjection> {
+    let needed = (BLOCK_HEADER_SIZE + data.len()).div_ceil(BLOCK_BANK_SIZE);
+    let total_banks = nor.len() / BLOCK_BANK_SIZE;
+    if needed > BLOCK_BANK_LAST - BLOCK_BANK_FIRST + 1 {
+        anyhow::bail!(
+            "file is too large for the {} KB file area (needs {} banks)",
+            (BLOCK_BANK_LAST - BLOCK_BANK_FIRST + 1) * BLOCK_BANK_SIZE / 1024,
+            needed
+        );
+    }
+
+    // Build an occupancy map of the file area.
+    let mut occupied = vec![false; total_banks];
+    for e in block_entries(nor) {
+        let end = (e.bank + e.banks).min(total_banks);
+        for slot in occupied.iter_mut().take(end).skip(e.bank) {
+            *slot = true;
+        }
+    }
+
+    let mut replaced = false;
+    let mut freed_from = None;
+    if let Some(target) = replace {
+        let entries = block_entries(nor);
+        let hit = entries
+            .iter()
+            .find(|e| e.name.eq_ignore_ascii_case(target.trim()))
+            .or_else(|| {
+                entries
+                    .iter()
+                    .find(|e| e.name.eq_ignore_ascii_case(name.trim()))
+            });
+        match hit {
+            Some(e) => {
+                let start = e.bank;
+                let count = e.banks;
+                let first = start * BLOCK_BANK_SIZE;
+                nor[first..first + count * BLOCK_BANK_SIZE].fill(0xFF);
+                for slot in occupied.iter_mut().skip(start).take(count) {
+                    *slot = false;
+                }
+                freed_from = Some((start, count));
+                replaced = true;
+            }
+            None => anyhow::bail!("no existing file named `{target}` to replace"),
+        }
+    }
+
+    // Find a run of free banks (prefer reusing the freed run when it fits).
+    let mut chosen = None;
+    if let Some((start, count)) = freed_from {
+        if count >= needed {
+            chosen = Some(start);
+        }
+    }
+    if chosen.is_none() {
+        let mut run = 0usize;
+        for (b, &taken) in occupied
+            .iter()
+            .enumerate()
+            .take(BLOCK_BANK_LAST + 1)
+            .skip(BLOCK_BANK_FIRST)
+        {
+            if !taken {
+                run += 1;
+                if run >= needed {
+                    chosen = Some(b + 1 - needed);
+                    break;
+                }
+            } else {
+                run = 0;
+            }
+        }
+    }
+    let Some(bank) = chosen else {
+        anyhow::bail!(
+            "no free {} KB slot left in banks {BLOCK_BANK_FIRST}..={BLOCK_BANK_LAST}; \
+             delete a file first or use --replace <name>",
+            needed * BLOCK_BANK_SIZE / 1024
+        );
+    };
+
+    let base = bank * BLOCK_BANK_SIZE;
+    nor[base..base + needed * BLOCK_BANK_SIZE].fill(0xFF);
+    nor[base] = 0x40;
+    nor[base + 1] = 0x00;
+    nor[base + 2..base + 18].copy_from_slice(&block_encode_name(name));
+    // Attribute bytes 18..24 are zero for a plain application / game.
+    nor[base + 18..base + 24].fill(0);
+    nor[base + BLOCK_HEADER_SIZE..base + BLOCK_HEADER_SIZE + data.len()].copy_from_slice(data);
+
+    Ok(BlockInjection {
+        bank,
+        banks: needed,
+        replaced,
+    })
+}

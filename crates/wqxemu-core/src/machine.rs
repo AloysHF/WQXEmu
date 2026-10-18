@@ -374,6 +374,12 @@ pub trait Machine: Send {
         Vec::new()
     }
 
+    /// Debug helper: per-64-byte NOR read map (1 = block was read since boot).
+    /// Empty unless the model implements it and tracing was enabled.
+    fn debug_nor_read_map(&self) -> Vec<u8> {
+        Vec::new()
+    }
+
     /// Debug helper: fill the whole NOR image with `val` (e.g. 0xFF to simulate
     /// a blank/unformatted flash). Used to trigger the firmware's formatter.
     fn debug_fill_nor(&mut self, _val: u8) {}

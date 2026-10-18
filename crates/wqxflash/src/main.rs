@@ -10,6 +10,7 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
+use wqxemu_core::injection::{block_entries, block_inject};
 use wqxemu_core::{Emulator, MachineModel, RomFiles};
 
 #[derive(Parser)]
@@ -75,6 +76,10 @@ enum Command {
         /// Entry type header (hex). Default: 0xDFC8 for .bin, 0xFF09 for .bas.
         #[arg(long)]
         header: Option<String>,
+        /// Replace/update an existing file with this name (its banks are
+        /// reused). Required to update a game that is already installed.
+        #[arg(long)]
+        replace: Option<String>,
     },
     /// Boot, then try each key id and report which ones cause the LCD to draw
     /// (debug helper for discovering the UI navigation keys).
@@ -132,6 +137,10 @@ enum Command {
         /// Save the (possibly modified) NOR image after the session.
         #[arg(long)]
         save_out: Option<String>,
+        /// Print which 256-byte NOR blocks the firmware read during the
+        /// session (debug helper; requires WQX_NORTRACE=1 for the model).
+        #[arg(long, default_value_t = false)]
+        nor_reads: bool,
     },
 }
 
@@ -349,6 +358,19 @@ fn find_free_data(nor: &[u8], len: usize, used: &[(usize, usize)]) -> anyhow::Re
     anyhow::bail!("no free data region of {len} bytes found");
 }
 
+/// PC1000/CC800 dumps may be stored half-swapped inside each 32 KB bank. The
+/// firmware's info-block signature sits at bank 0 + 0x4000 in a swapped dump
+/// and at bank 0 + 0x0000 once normalised (same rule as the machine loader).
+fn block_fs_swapped(data: &[u8]) -> bool {
+    const SIG: [u8; 7] = [0x2A, 0xBD, 0xF0, 0xD4, 0xB6, 0xBC, 0xFB];
+    if data.len() < 0x4007 {
+        return false;
+    }
+    let at_zero = data[0x0000..0x0007] == SIG;
+    let at_half = data[0x4000..0x4007] == SIG;
+    at_half && !at_zero
+}
+
 fn main() -> Result<()> {
     env_logger::builder()
         .filter_level(log::LevelFilter::Info)
@@ -424,21 +446,14 @@ fn main() -> Result<()> {
             file,
             name,
             header,
+            replace,
         } => {
             let model = resolve_model(&model)?;
-            if model != MachineModel::Nc1020 {
-                bail!(
-                    "direct GFFS injection is currently implemented for nc1020 only (model={})",
-                    model.name()
-                );
-            }
             guard_outside_rom_dir(&rom_dir, &out_path)?;
             let rom_files = RomFiles::from_dir(&rom_dir)?;
             let nor_path = rom_files.nor.context("no NOR dump found in --rom-dir")?;
             let raw = std::fs::read(&nor_path)
                 .with_context(|| format!("cannot read {}", nor_path.display()))?;
-            // On-disk <-> logical is a 16KB half-swap per 32KB bank (involution).
-            let mut logical = nc1020_swap(&raw);
 
             let data =
                 std::fs::read(&file).with_context(|| format!("cannot read {}", file.display()))?;
@@ -447,39 +462,124 @@ fn main() -> Result<()> {
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| "GAME.BIN".to_string())
             });
-            let hdr = match header {
-                Some(h) => u16::from_str_radix(h.trim_start_matches("0x"), 16)
-                    .context("invalid --header")?,
-                None if stored_name.to_ascii_lowercase().ends_with(".bas") => 0xFF09,
-                None => 0xDFC8,
-            };
-            gffs_inject_nc1020(&mut logical, &stored_name, &data, hdr)
-                .with_context(|| format!("inject `{stored_name}` failed"))?;
-            std::fs::write(&out_path, nc1020_swap(&logical))
-                .with_context(|| format!("cannot write {}", out_path.display()))?;
-            println!(
-                "[ok] injected `{stored_name}` ({} bytes, hdr=0x{hdr:04X}) -> {}",
-                data.len(),
-                out_path.display()
-            );
+
+            match model {
+                MachineModel::Nc1020 => {
+                    // On-disk <-> logical is a 16KB half-swap per 32KB bank.
+                    let mut logical = nc1020_swap(&raw);
+                    let hdr = match header {
+                        Some(h) => u16::from_str_radix(h.trim_start_matches("0x"), 16)
+                            .context("invalid --header")?,
+                        None if stored_name.to_ascii_lowercase().ends_with(".bas") => 0xFF09,
+                        None => 0xDFC8,
+                    };
+                    gffs_inject_nc1020(&mut logical, &stored_name, &data, hdr)
+                        .with_context(|| format!("inject `{stored_name}` failed"))?;
+                    std::fs::write(&out_path, nc1020_swap(&logical))
+                        .with_context(|| format!("cannot write {}", out_path.display()))?;
+                    println!(
+                        "[ok] injected `{stored_name}` ({} bytes, hdr=0x{hdr:04X}) -> {}",
+                        data.len(),
+                        out_path.display()
+                    );
+                }
+                MachineModel::Pc1000 | MachineModel::Cc800 => {
+                    // PC1000/CC800 dumps are stored half-swapped like the
+                    // NC1020; detect the orientation the same way the machine
+                    // loader does so we always edit in logical order.
+                    let swapped = block_fs_swapped(&raw);
+                    let mut logical = if swapped {
+                        nc1020_swap(&raw)
+                    } else {
+                        raw.clone()
+                    };
+                    let info = block_inject(&mut logical, &stored_name, &data, replace.as_deref())
+                        .with_context(|| format!("inject `{stored_name}` failed"))?;
+                    let out = if swapped {
+                        nc1020_swap(&logical)
+                    } else {
+                        logical
+                    };
+                    std::fs::write(&out_path, out)
+                        .with_context(|| format!("cannot write {}", out_path.display()))?;
+                    println!(
+                        "[ok] {} `{stored_name}` ({} bytes) -> bank {}{} -> {}",
+                        if info.replaced { "updated" } else { "added" },
+                        data.len(),
+                        info.bank,
+                        if info.banks > 1 {
+                            format!("..{}", info.bank + info.banks - 1)
+                        } else {
+                            String::new()
+                        },
+                        out_path.display()
+                    );
+                    if !info.replaced {
+                        println!(
+                            "     note: the 应用程序 list is built by scanning banks 2..=13, so \
+                             the new entry shows up there."
+                        );
+                    }
+                }
+                other => bail!(
+                    "flash injection is implemented for nc1020/pc1000/cc800; \
+                     {} stores its file system in NAND (not supported yet)",
+                    other.name()
+                ),
+            }
             Ok(())
         }
         Command::Ls { model, rom_dir } => {
             let model = resolve_model(&model)?;
-            let emu = build_emulator(model, &rom_dir)?;
-            let entries = emu.gffs_list();
-            println!(
-                "GFFS user-directory entries for {} ({}):",
-                model.name(),
-                entries.len()
-            );
-            for e in &entries {
-                println!(
-                    "  {:<16} len={:5} start=0x{:04X}",
-                    e.name, e.length, e.start
-                );
+            match model {
+                MachineModel::Pc1000 | MachineModel::Cc800 => {
+                    let files = RomFiles::from_dir(&rom_dir)?;
+                    let nor_path = files.nor.context("no NOR dump found in --rom-dir")?;
+                    let raw = std::fs::read(&nor_path)?;
+                    let logical = if block_fs_swapped(&raw) {
+                        nc1020_swap(&raw)
+                    } else {
+                        raw
+                    };
+                    let entries = block_entries(&logical);
+                    println!(
+                        "block file system entries for {} ({}):",
+                        model.name(),
+                        entries.len()
+                    );
+                    for e in &entries {
+                        println!(
+                            "  bank {:2}  banks={} len={:5} attr=0x{:02X}  {}",
+                            e.bank, e.banks, e.length, e.attr, e.name
+                        );
+                    }
+                    let used: usize = entries.iter().map(|e| e.banks).sum();
+                    println!(
+                        "  file area: {} of {} banks used (2..=13)",
+                        used,
+                        wqxemu_core::injection::BLOCK_BANK_LAST
+                            - wqxemu_core::injection::BLOCK_BANK_FIRST
+                            + 1
+                    );
+                    Ok(())
+                }
+                _ => {
+                    let emu = build_emulator(model, &rom_dir)?;
+                    let entries = emu.gffs_list();
+                    println!(
+                        "GFFS user-directory entries for {} ({}):",
+                        model.name(),
+                        entries.len()
+                    );
+                    for e in &entries {
+                        println!(
+                            "  {:<16} len={:5} start=0x{:04X}",
+                            e.name, e.length, e.start
+                        );
+                    }
+                    Ok(())
+                }
             }
-            Ok(())
         }
         Command::Keysweep {
             model,
@@ -561,6 +661,7 @@ fn main() -> Result<()> {
             dump_lcd,
             png,
             save_out,
+            nor_reads,
         } => {
             let model = resolve_model(&model)?;
             let mut emu = build_emulator(model, &rom_dir)?;
@@ -634,6 +735,28 @@ fn main() -> Result<()> {
             if let Some(path) = png {
                 save_lcd_png(&emu.framebuffer(), emu.lcd_width(), emu.lcd_height(), &path)?;
                 println!("LCD PNG saved to {path}");
+            }
+            if nor_reads {
+                let map = emu.debug_nor_read_map();
+                if map.is_empty() {
+                    println!("nor-reads: model did not collect a read map");
+                } else {
+                    println!("nor-reads: {} blocks of 64B traced", map.len());
+                    let mut start: Option<usize> = None;
+                    for (i, &v) in map.iter().enumerate() {
+                        match (v != 0, start) {
+                            (true, None) => start = Some(i),
+                            (false, Some(s0)) => {
+                                println!("  read 0x{:05X}..0x{:05X}", s0 * 64, i * 64);
+                                start = None;
+                            }
+                            _ => {}
+                        }
+                    }
+                    if let Some(s0) = start {
+                        println!("  read 0x{:05X}..0x{:05X}", s0 * 64, map.len() * 64);
+                    }
+                }
             }
             if let Some(path) = save_out {
                 emu.save_nor(&path)

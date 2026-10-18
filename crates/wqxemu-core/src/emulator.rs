@@ -339,6 +339,11 @@ impl Emulator {
         self.machine.debug_nor_window(off, len)
     }
 
+    /// Debug helper: per-64-byte NOR read map (1 = block read since boot).
+    pub fn debug_nor_read_map(&self) -> Vec<u8> {
+        self.machine.debug_nor_read_map()
+    }
+
     /// Debug helper: fill the whole NOR image with `val` (e.g. 0xFF for a
     /// blank/unformatted flash).
     pub fn debug_fill_nor(&mut self, val: u8) {
