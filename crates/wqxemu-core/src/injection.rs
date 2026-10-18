@@ -700,12 +700,23 @@ mod tests {
 // 16-byte records `[0:2]` slot, `[2:16]` GB2312/ASCII name (NUL terminated).
 //
 // Direct injection (see [`nand_inject`]) writes a FAT record + a root-dir
-// entry.  NOTE: the firmware's on-device launcher reads file *names* from the
-// subdirectory pages (`应用程序` -> page 1490, `文本文件` -> page 1491), whose
-// entries use an obfuscated glyph encoding (not GB2312) and are already nearly
-// full.  Cracking that name encoding (and extending the directory) is a
-// separate reverse-engineering task; until then, injected files are visible to
-// `wqxflash ls` via the root directory but are not surfaced by the launcher.
+// entry.  Visibility notes, verified against the firmware itself (NAND read
+// trace while driving the UI):
+//
+// * The stock menus (英汉/游戏/其他/资源管理…) are *hardcoded*: navigating them
+//   reads only the font region (NC2000 pages 45698+, ~3000 16x16 glyphs) and
+//   the per-block page-0 scan — never a directory page.  So an injected file
+//   cannot show up in the built-in UI on a factory dump, no matter where it is
+//   written.
+// * User games (.bas / LAVA) are listed by *launcher applications* (文件管理 /
+//   LAVA), which do browse this file system.  The root directory's plaintext
+//   `[slot][GB2312]` format (also used by the secondary-volume directories
+//   found at high pages, e.g. NC2000 pages 46624/46880) is what such apps
+//   read, so a root-level entry is the right place for an injected file.
+// * Those secondary directories reference slots beyond the single FAT (NC2000
+//   slots 141..201 vs. the 28-slot FAT); no second allocation table exists
+//   anywhere in the image, so they are a stale/download-tool volume that the
+//   firmware does not mount.
 
 /// One record of the NC2000/NC3000 NAND allocation table.
 #[derive(Debug, Clone, PartialEq, Eq)]
