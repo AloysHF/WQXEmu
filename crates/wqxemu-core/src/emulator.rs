@@ -10,7 +10,10 @@ use anyhow::{Context, Result};
 
 use crate::audio::SAMPLE_RATE;
 use crate::cpu::{Cpu, RESET_VECTOR};
-use crate::injection::{inject_config, GffsEntry};
+use crate::injection::{
+    inject_config, nand_inject, nand_root_entries, GffsEntry, NandDirEntry, NandFsParams,
+    NandInjection,
+};
 use crate::lcd::{LCD_HEIGHT, LCD_WIDTH};
 use crate::machine::{Machine, MachineModel, RomFiles};
 use crate::machines;
@@ -146,21 +149,26 @@ impl Emulator {
         let mut frames = 0;
         // NC2000/NC3000 take ~1200 frames to reach their desktop (NAND check),
         // NC1020 sleeps after ~200, so this cap only bounds the slow models.
-        const MAX_FRAMES: u32 = 1800;
+        let max_frames: u32 = std::env::var("WQX_BOOT_FRAMES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1800);
         let boot_keys = self.machine.injection_boot_keys().to_vec();
         let mut next_key = 0usize;
-        while frames < MAX_FRAMES && !self.machine.is_sleeping() {
+        while frames < max_frames && !self.machine.is_sleeping() {
             self.run_frame();
             frames += 1;
             // Some models stop at a confirmation prompt ("keep the data in
-            // flash?") before reaching their desktop; answer it for the user.
-            if next_key < boot_keys.len() && frames == 180 {
-                self.machine.set_key(boot_keys[next_key], true);
+            // flash?") before their desktop appears; answer it repeatedly so
+            // it does not matter when exactly the prompt shows up.
+            if !boot_keys.is_empty() && frames >= 150 && frames % 45 == 0 {
+                let key = boot_keys[next_key % boot_keys.len()];
+                self.machine.set_key(key, true);
                 for _ in 0..4 {
                     self.run_frame();
                     frames += 1;
                 }
-                self.machine.set_key(boot_keys[next_key], false);
+                self.machine.set_key(key, false);
                 self.run_frame();
                 frames += 1;
                 next_key += 1;
@@ -206,7 +214,7 @@ impl Emulator {
         self.boot_for_injection();
 
         // 2. Stage the 16-byte, space-padded file name.
-        let mut padded = [b' '; 16];
+        let mut padded = [cfg.name_pad; 16];
         let name_bytes = name.as_bytes();
         let n = name_bytes.len().min(16);
         padded[..n].copy_from_slice(&name_bytes[..n]);
@@ -284,46 +292,53 @@ impl Emulator {
         self.cpu.pc = 0x3000;
 
         if std::env::var("WQX_TRACE").is_ok() {
+            // Run the whole pump while recording the BRK syscalls the firmware
+            // issues, so the create/write/close sequence is visible.
             let mut trace: Vec<u16> = Vec::new();
-            for _ in 0..4000u32 {
-                trace.push(self.cpu.pc);
-                if self.cpu.pc == 0xEAC2 {
-                    log::info!(
-                        "  EAC2: zpB0={:02X} zpB1={:02X} zpB2={:02X} id3f5={:02X} bank={:02X} t400A={:02X}{:02X}",
-                        self.peek(0xB0),
-                        self.peek(0xB1),
-                        self.peek(0xB2),
-                        self.peek(0x03F5),
-                        self.peek(0x00),
-                        self.peek(0x400B),
-                        self.peek(0x400A)
-                    );
+            let mut calls: Vec<(u8, u8, u16)> = Vec::new();
+            let mut steps = 0u64;
+            while self.machine.inject_active() && steps < 4_000_000 {
+                steps += 1;
+                if trace.len() < 400 {
+                    trace.push(self.cpu.pc);
+                }
+                if self.cpu.pc == 0xEB1E && calls.len() < 400 {
+                    // At 0xEB1E the firmware has just loaded the syscall id
+                    // into 0xB1 and the signature into 0x03F5.
+                    let id = self.peek(0xB1);
+                    let sig = self.peek(0x03F5);
+                    let ptr = self.cpu.pc;
+                    if calls.last().map(|c| (c.0, c.1)) != Some((id, sig)) {
+                        calls.push((id, sig, ptr));
+                    }
                 }
                 self.machine.step(&mut self.cpu);
-                if !self.machine.inject_active() {
-                    break;
-                }
             }
-            let hits = |t: u16| trace.contains(&t);
-            let max = trace.iter().copied().max().unwrap_or(0);
             log::info!(
-                "TRACE n={} E999={} E8E1={} E768={} max=0x{:04X}",
-                trace.len(),
-                hits(0xE999),
-                hits(0xE8E1),
-                hits(0xE768),
-                max
+                "TRACE steps={} calls={} max=0x{:04X}",
+                steps,
+                calls.len(),
+                trace.iter().copied().max().unwrap_or(0)
             );
-            log::info!("TRACE seq: {:04X?}", &trace[..trace.len().min(160)]);
+            log::info!("TRACE seq: {:04X?}", &trace[..trace.len().min(120)]);
+            for (i, (id, sig, _)) in calls.iter().enumerate().take(80) {
+                log::info!("  call {i}: id=0x{id:02X} sig=0x{sig:02X}");
+            }
         }
 
         // 7. Pump until the bridge reports completion. The bridge deactivates
         //    itself once the last byte has been delivered and the firmware
         //    reads the terminating 0.
         const STEP_CYCLES: u64 = 2_000;
-        const MAX_STEPS: u64 = 2_000_000 / STEP_CYCLES; // ~2,000,000 cycles cap
+        // NC2000/NC3000 redirect the file with many nested syscalls plus NAND
+        // page reads, so they need a much larger budget than the NC1020.
+        let budget: u64 = std::env::var("WQX_PUMP_CYCLES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cfg.pump_cycles);
+        let max_steps = budget / STEP_CYCLES;
         let mut guard = 0u64;
-        while self.machine.inject_active() && guard < MAX_STEPS {
+        while self.machine.inject_active() && guard < max_steps {
             self.run_cycles(STEP_CYCLES);
             guard += 1;
         }
@@ -355,8 +370,12 @@ impl Emulator {
         // Models whose file system lives in NAND (nc2000/nc3000) have no NOR
         // directory to re-read, so fall back to "the firmware programmed NAND
         // while we pumped the file in".
-        let nand_written = self.machine.nand_program_ops() > nand_ops_before;
-        let recognized = in_directory || (entries.is_empty() && nand_written);
+        // NAND models (nc2000/nc3000) keep the directory in NAND, so check for
+        // the stored (NUL terminated) name instead of a NOR directory entry.
+        let mut needle = name.trim().as_bytes().to_vec();
+        needle.push(0);
+        let nand_entry = self.machine.nand_contains(&needle);
+        let recognized = in_directory || nand_entry;
         let (wc, po, eo) = self.machine.flash_stats();
         log::info!(
             "inject_file: name={} bytes_sent={} recognized={} entries={} flash(w={} prog={} erase={}) nand_prog={}",
@@ -369,6 +388,7 @@ impl Emulator {
             eo,
             self.machine.nand_program_ops() - nand_ops_before
         );
+        let _ = nand_ops_before;
 
         Ok(InjectReport {
             name: name.to_string(),
@@ -377,6 +397,40 @@ impl Emulator {
             recognized,
             entries,
         })
+    }
+
+    /// Directly add or update a file in the NC2000 / NC3000 NAND file system by
+    /// editing the in-memory NAND image offline (no firmware execution).  This
+    /// is the reliable path for those models: the firmware-driven pump writes a
+    /// file's data pages but never commits the FAT / directory metadata in
+    /// WQXEmu, so it cannot register a file.  Returns the slot and data-page
+    /// span that were written.
+    pub fn inject_nand_file(
+        &mut self,
+        name: &str,
+        data: &[u8],
+        replace: Option<&str>,
+    ) -> Result<NandInjection> {
+        let Some(params) = NandFsParams::for_model(self.model()) else {
+            anyhow::bail!(
+                "Model `{}` does not use the NC2000/NC3000 NAND layout",
+                self.model().name()
+            );
+        };
+        let Some(nand) = self.machine.nand_mut() else {
+            anyhow::bail!("Model `{}` has no NAND image loaded", self.model().name());
+        };
+        nand_inject(nand, &params, name, data, replace)
+    }
+
+    /// List the root-directory entries of the NC2000 / NC3000 NAND file system.
+    pub fn nand_root_list(&self) -> Vec<NandDirEntry> {
+        if let Some(params) = NandFsParams::for_model(self.model()) {
+            if let Some(nand) = self.machine.nand_slice() {
+                return nand_root_entries(nand, &params);
+            }
+        }
+        Vec::new()
     }
 
     /// List the user-file directory entries currently persisted in flash.

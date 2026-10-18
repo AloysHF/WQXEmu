@@ -11,7 +11,8 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 use wqxemu_core::injection::{
-    block_entries, block_inject, nand_directories, nand_fat_entries, nand_name_to_string,
+    block_entries, block_inject, nand_fat_entries, nand_inject, nand_name_to_string,
+    nand_root_entries, NandFsParams, NandInjection,
 };
 use wqxemu_core::{Emulator, MachineModel, RomFiles};
 
@@ -454,21 +455,39 @@ fn main() -> Result<()> {
                     default_name
                 };
 
-                let report = emu
-                    .inject_file(&target_name, &data)
-                    .with_context(|| format!("Injection of `{}` failed", target_name))?;
-
-                if report.recognized {
-                    println!(
-                        "[ok] `{}` injected ({} / {} bytes) and recognised by firmware GFFS",
-                        report.name, report.bytes_sent, report.file_size
-                    );
-                } else {
-                    println!(
-                        "[warn] `{}` injected ({} / {} bytes) but NOT found in GFFS after re-mount; \
-                         the firmware may use a different syscall interface for this image",
-                        report.name, report.bytes_sent, report.file_size
-                    );
+                match model {
+                    MachineModel::Nc2000 | MachineModel::Nc3000 => {
+                        // The firmware-driven pump cannot register files in
+                        // WQXEmu, so `put` edits the NAND image directly.
+                        let info = emu
+                            .inject_nand_file(&target_name, &data, None)
+                            .with_context(|| format!("Injection of `{}` failed", target_name))?;
+                        println!(
+                            "[ok] `{}` injected ({} bytes) -> NAND slot {} pages {}+{}",
+                            target_name,
+                            data.len(),
+                            info.slot,
+                            info.start_page,
+                            info.pages
+                        );
+                    }
+                    _ => {
+                        let report = emu
+                            .inject_file(&target_name, &data)
+                            .with_context(|| format!("Injection of `{}` failed", target_name))?;
+                        if report.recognized {
+                            println!(
+                                "[ok] `{}` injected ({} / {} bytes) and recognised by firmware GFFS",
+                                report.name, report.bytes_sent, report.file_size
+                            );
+                        } else {
+                            println!(
+                                "[warn] `{}` injected ({} / {} bytes) but NOT found in GFFS after re-mount; \
+                                 the firmware may use a different syscall interface for this image",
+                                report.name, report.bytes_sent, report.file_size
+                            );
+                        }
+                    }
                 }
             }
 
@@ -569,11 +588,36 @@ fn main() -> Result<()> {
                         );
                     }
                 }
-                other => bail!(
-                    "flash injection is implemented for nc1020/pc1000/cc800; \
-                     {} stores its file system in NAND (not supported yet)",
-                    other.name()
-                ),
+                MachineModel::Nc2000 | MachineModel::Nc3000 => {
+                    // NC2000 / NC3000 keep the file system in NAND.  The
+                    // firmware-driven pump cannot register files in WQXEmu, so
+                    // we edit the NAND image directly (offline).
+                    let nand_path = rom_files.nand.context("no NAND dump found in --rom-dir")?;
+                    let mut nand = std::fs::read(&nand_path)
+                        .with_context(|| format!("cannot read {}", nand_path.display()))?;
+                    let params = NandFsParams::for_raw(model)
+                        .context("model does not use the NC2000/NC3000 NAND layout")?;
+                    let info: NandInjection =
+                        nand_inject(&mut nand, &params, &stored_name, &data, replace.as_deref())
+                            .with_context(|| format!("inject `{stored_name}` failed"))?;
+                    std::fs::write(&out_path, &nand)
+                        .with_context(|| format!("cannot write {}", out_path.display()))?;
+                    println!(
+                        "[ok] {} `{stored_name}` ({} bytes) -> slot {} pages {}+{} -> {}",
+                        if info.replaced { "updated" } else { "added" },
+                        data.len(),
+                        info.slot,
+                        info.start_page,
+                        info.pages,
+                        out_path.display()
+                    );
+                    if !info.replaced {
+                        println!(
+                            "     note: the file appears in the device root directory; \
+                             the NAND FAT and root entry were written directly."
+                        );
+                    }
+                }
             }
             Ok(())
         }
@@ -634,7 +678,9 @@ fn main() -> Result<()> {
                     let files = RomFiles::from_dir(&rom_dir)?;
                     let nand_path = files.nand.context("no NAND dump found in --rom-dir")?;
                     let raw = std::fs::read(&nand_path)?;
-                    let entries = nand_fat_entries(&raw);
+                    let params = NandFsParams::for_raw(model)
+                        .context("model does not use the NC2000/NC3000 NAND layout")?;
+                    let entries = nand_fat_entries(&raw, &params);
                     println!(
                         "NAND allocation table for {} ({} records):",
                         model.name(),
@@ -653,16 +699,15 @@ fn main() -> Result<()> {
                                 .join(", ")
                         );
                     }
-                    // Directory entries name the allocation-table slots, so
-                    // join the two to print real file names.
-                    let dirs = nand_directories(&raw, 2);
+                    // The root directory (page 31) maps slots to human names.
+                    let root = nand_root_entries(&raw, &params);
                     let mut names: std::collections::HashMap<u16, String> =
                         std::collections::HashMap::new();
-                    for d in &dirs {
+                    for d in &root {
                         names.insert(d.slot, nand_name_to_string(&d.name));
                     }
-                    if !dirs.is_empty() {
-                        println!();
+                    if !root.is_empty() {
+                        println!("\nroot directory (page {}):", params.root_dir_page);
                         for e in &entries {
                             let name = names
                                 .get(&e.slot)
@@ -680,13 +725,6 @@ fn main() -> Result<()> {
                                     .join(", ")
                             );
                         }
-                        println!(
-                            "\n  directory pages found: {}  (names without a slot are unused)",
-                            dirs.iter()
-                                .map(|d| d.page)
-                                .collect::<std::collections::BTreeSet<_>>()
-                                .len()
-                        );
                     }
                     Ok(())
                 }

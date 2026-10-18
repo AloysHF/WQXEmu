@@ -386,9 +386,29 @@ pub trait Machine: Send {
         0
     }
 
+    /// Validation helper: true when `needle` occurs in the NAND image. Used by
+    /// the injection report to confirm a file really landed in the NAND file
+    /// system (directory entry present), not just that pages were programmed.
+    fn nand_contains(&self, _needle: &[u8]) -> bool {
+        false
+    }
+
     /// Debug/validation: number of NAND program operations since power-on.
     fn nand_program_ops(&self) -> u32 {
         0
+    }
+
+    /// Mutable access to the in-memory NAND image, used by offline direct
+    /// injection (`wqxflash inject` / `put` for NAND models).  Models without a
+    /// NAND return `None`.
+    fn nand_mut(&mut self) -> Option<&mut [u8]> {
+        None
+    }
+
+    /// Read-only access to the in-memory NAND image.  Models without a NAND
+    /// return `None`.
+    fn nand_slice(&self) -> Option<&[u8]> {
+        None
     }
 
     /// Debug helper: copy `len` bytes of the NAND image starting at `off`.

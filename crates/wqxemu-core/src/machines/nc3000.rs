@@ -691,24 +691,20 @@ impl Nc3000Machine {
         let a25 = (self.nand_addr[3] & 0x01) as usize;
         let page = a25 * 256 * 256 + high * 256 + mid;
 
-        if spare {
-            // Spare area program (16 bytes)
-            if self.nand_data.len() == 16 {
-                let final_off = page * NAND_PAGE_SIZE + low + 512;
-                for (i, &b) in self.nand_data.iter().enumerate() {
-                    let idx = final_off + i;
-                    if idx < self.nand.len() {
-                        self.nand[idx] &= b;
-                    }
-                }
-            }
-        } else if !spare && self.nand_data.len() == NAND_PAGE_SIZE {
-            let final_off = page * NAND_PAGE_SIZE + low;
-            for (i, &b) in self.nand_data.iter().enumerate() {
-                let idx = final_off + i;
-                if idx < self.nand.len() {
-                    self.nand[idx] &= b;
-                }
+        // A program may cover a partial page (the firmware writes small
+        // structures such as a single directory record), so accept any
+        // non-empty payload instead of requiring a full 512-byte page.
+        let (base, limit) = if spare {
+            (page * NAND_PAGE_SIZE + low + 512, 16)
+        } else {
+            (page * NAND_PAGE_SIZE + low, NAND_PAGE_SIZE)
+        };
+        let n = self.nand_data.len().min(limit);
+        for (i, &b) in self.nand_data.iter().take(n).enumerate() {
+            let idx = base + i;
+            if idx < self.nand.len() {
+                // NAND programming can only clear bits, never set them.
+                self.nand[idx] &= b;
             }
         }
     }
@@ -1505,12 +1501,28 @@ impl Machine for Nc3000Machine {
         &[0x2E]
     }
 
+    fn nand_contains(&self, needle: &[u8]) -> bool {
+        !needle.is_empty()
+            && self
+                .nand
+                .windows(needle.len())
+                .any(|window| window == needle)
+    }
+
     fn nand_program_ops(&self) -> u32 {
         self.nand_prog_ops
     }
 
     fn nand_write_calls(&self) -> u32 {
         self.nand_write_calls
+    }
+
+    fn nand_mut(&mut self) -> Option<&mut [u8]> {
+        Some(&mut self.nand)
+    }
+
+    fn nand_slice(&self) -> Option<&[u8]> {
+        Some(&self.nand)
     }
 
     fn debug_nand_window(&self, off: usize, len: usize) -> Vec<u8> {

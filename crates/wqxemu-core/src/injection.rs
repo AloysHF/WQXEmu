@@ -138,6 +138,13 @@ pub struct InjectConfig {
     pub params: Vec<(u16, u8)>,
     /// The exact 6502 pump routine copied to 0x3000.
     pub routine: &'static [u8],
+    /// Padding byte for the 16-byte name field: `b' '` for the NC1020 GFFS
+    /// (space padded) and `0` for the NC2000/NC3000 (C string).
+    pub name_pad: u8,
+    /// CPU-cycle budget for the pump. The NC1020 finishes almost immediately,
+    /// while the NC2000/NC3000 walk a long chain of nested syscalls and NAND
+    /// page reads for a single file, so they need far more.
+    pub pump_cycles: u64,
 }
 
 // nc1020 (non-Taiwan) pump routine, copied verbatim from wangyu's `cmd.cpp`.
@@ -172,6 +179,7 @@ pub fn inject_config(model: MachineModel) -> Option<InjectConfig> {
     match model {
         MachineModel::Nc1020 => Some(InjectConfig {
             name_addr: 0x121C,
+            name_pad: b' ',
             params: vec![
                 (0x1219, 0x61),
                 (0x121A, 0xF8),
@@ -181,16 +189,21 @@ pub fn inject_config(model: MachineModel) -> Option<InjectConfig> {
                 (0x1231, 0xFF),
             ],
             routine: NC1020_PUT_ROUTINE,
+            pump_cycles: 4_000_000,
         }),
         MachineModel::Nc2000 => Some(InjectConfig {
             name_addr: 0x08BE,
+            name_pad: 0,
             params: vec![],
             routine: NC2000_PUT_ROUTINE,
+            pump_cycles: 400_000_000,
         }),
         MachineModel::Nc3000 => Some(InjectConfig {
             name_addr: 0x088D,
+            name_pad: 0,
             params: vec![],
             routine: NC3000_PUT_ROUTINE,
+            pump_cycles: 400_000_000,
         }),
         MachineModel::Pc1000 | MachineModel::Cc800 => None,
     }
@@ -532,26 +545,127 @@ mod tests {
         let err = block_inject(&mut nor, "NEXT.BIN", &[0x55; 8], None).unwrap_err();
         assert!(err.to_string().contains("no free"));
     }
+
+    #[test]
+    fn nand_inject_adds_file_then_second_and_replaces() {
+        const PAGES: usize = 2048;
+        let mut nand = vec![0xFFu8; PAGES * NAND_FULL_PAGE];
+        let params = NandFsParams {
+            plane_offset: 0,
+            fat_first_page: 0,
+            root_dir_page: 31,
+            fat_sig: [0xC0, 0x79],
+            fat_const: [0x79, 0x00],
+        };
+
+        // First file -> slot 1, ~3 data pages (1500 bytes).
+        let data1 = vec![0xAB; 1500];
+        let info1 = nand_inject(&mut nand, &params, "A.BIN", &data1, None).unwrap();
+        assert_eq!(info1.slot, 1);
+        assert_eq!(info1.pages, 3);
+        let fat = nand_fat_entries(&nand, &params);
+        assert_eq!(fat.len(), 1);
+        assert_eq!(fat[0].slot, 1);
+        assert_eq!(fat[0].blocks, 3);
+        assert_eq!(
+            fat[0].pages,
+            vec![
+                info1.start_page as u16,
+                info1.start_page as u16 + 1,
+                info1.start_page as u16 + 2
+            ]
+        );
+        let root = nand_root_entries(&nand, &params);
+        let e = root.iter().find(|e| e.slot == 1).expect("slot 1 dir entry");
+        assert_eq!(nand_name_to_string(&e.name), "A.BIN");
+        let s = info1.start_page * NAND_FULL_PAGE;
+        assert_eq!(&nand[s..s + 512], &data1[..512]);
+
+        // Second file -> slot 2, contiguous after the first.
+        let data2 = vec![0xCD; 800];
+        let info2 = nand_inject(&mut nand, &params, "B.BIN", &data2, None).unwrap();
+        assert_eq!(info2.slot, 2);
+        assert_eq!(info2.start_page, info1.start_page + 3);
+        let root = nand_root_entries(&nand, &params);
+        assert!(root
+            .iter()
+            .any(|e| e.slot == 2 && nand_name_to_string(&e.name) == "B.BIN"));
+
+        // Replace A.BIN -> reuse slot 1, free the old pages.
+        let data3 = vec![0x11; 200];
+        let info3 = nand_inject(&mut nand, &params, "A.BIN", &data3, Some("A.BIN")).unwrap();
+        assert!(info3.replaced);
+        assert_eq!(info3.slot, 1);
+        let s = info1.start_page * NAND_FULL_PAGE;
+        assert!(nand[s..s + NAND_FULL_PAGE].iter().all(|&b| b == 0xFF));
+        // The FAT still has exactly two records (slot 1 + slot 2).
+        assert_eq!(nand_fat_entries(&nand, &params).len(), 2);
+    }
+
+    #[test]
+    fn nand_inject_preserves_existing_nc2000_records() {
+        // Only run when the real dump is available (not in CI).
+        let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default();
+        let candidates = [
+            format!("{manifest}/../../tmp/roms/nc2000/nc2000.nand"),
+            "tmp/roms/nc2000/nc2000.nand".to_string(),
+        ];
+        let Some(raw) = candidates.iter().find_map(|p| std::fs::read(p).ok()) else {
+            return;
+        };
+        let mut nand = raw.clone();
+        let params = NandFsParams::for_raw(MachineModel::Nc2000).unwrap();
+        let before = nand_fat_entries(&nand, &params);
+        assert_eq!(before.len(), 28);
+
+        let data = vec![0x42; 1024];
+        let info = nand_inject(&mut nand, &params, "GAME.BIN", &data, None).unwrap();
+        assert_eq!(info.slot, 29);
+        let after = nand_fat_entries(&nand, &params);
+        // 28 original + 1 new, and the original 28 are untouched.
+        assert_eq!(after.len(), 29);
+        for b in &before {
+            let a = after.iter().find(|e| e.slot == b.slot).unwrap();
+            assert_eq!(a.blocks, b.blocks);
+            assert_eq!(a.pages, b.pages);
+        }
+        // The new record spans `blocks` contiguous pages from its start.
+        let rec = after.iter().find(|e| e.slot == 29).unwrap();
+        assert_eq!(rec.blocks as usize, info.pages);
+        let root = nand_root_entries(&nand, &params);
+        assert!(root
+            .iter()
+            .any(|e| e.slot == 29 && nand_name_to_string(&e.name) == "GAME.BIN"));
+    }
 }
 
 // ---------------------------------------------------------------------------
-// NC2000 / NC3000 NAND file allocation table (read only)
+// NC2000 / NC3000 NAND file allocation table + root directory
 // ---------------------------------------------------------------------------
 //
 // The first NAND pages hold a table of 32-byte records, one per file:
 //
-//   +0  u16 slot           1-based, sequential across records
-//   +2  u16 flags          0x808A / 0x80AB / 0x80BA on the observed dumps
-//   +4  ..+14  header      version/signature bytes
+//   +0  u16 slot           1-based, sequential across records (1, 2, 3, ...)
+//   +2  u16 flags          0x808A = file, 0xE0FF = directory, 0x80BA = root
+//   +4  u16 signature      NC2000: C0 79, NC3000: C0 7A  (model-specific)
+//   +8  u16 const          NC2000: 79 00, NC3000: 7A 08  (model-specific)
 //   +14 u16 blocks         number of NAND pages the file occupies
-//   +16 u16 reserved
-//   +18 6 x u16            first page numbers, terminated by 0xFFFF
+//   +18 6 x u16            page span: [start, start+1, start+2, start+blocks]
+//                          (only the first `min(blocks,3)` plus the end
+//                          boundary are stored; the rest are 0xFFFF)
 //   +30 A8 A8              record trailer
 //
-// Only the first few page numbers of a file are listed here; the remaining
-// pages are reached through the per-page spare area.  File *names* are not in
-// this table, which is why NC2000/NC3000 injection is still open: adding a
-// file needs the name -> record mapping of the directory the firmware reads.
+// Files are stored as a single contiguous span `[start, start+blocks)`; no
+// spare-area linkage is required.  The root directory lives in page 31 as
+// 16-byte records `[0:2]` slot, `[2:16]` GB2312/ASCII name (NUL terminated).
+//
+// Direct injection (see [`nand_inject`]) writes a FAT record + a root-dir
+// entry.  NOTE: the firmware's on-device launcher reads file *names* from the
+// subdirectory pages (`应用程序` -> page 1490, `文本文件` -> page 1491), whose
+// entries use an obfuscated glyph encoding (not GB2312) and are already nearly
+// full.  Cracking that name encoding (and extending the directory) is a
+// separate reverse-engineering task; until then, injected files are visible to
+// `wqxflash ls` via the root directory but are not surfaced by the launcher.
 
 /// One record of the NC2000/NC3000 NAND allocation table.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -569,16 +683,33 @@ pub struct NandFatEntry {
 /// NAND page size including the spare area (512 data + 16 spare).
 pub const NAND_FULL_PAGE: usize = 528;
 
-/// Parse the allocation table at the start of a NAND dump.
+/// Parse the allocation table at the start of a NAND dump (logical, plane 0).
 ///
-/// Stops at the first page that holds no valid record, and at `MAX_PAGES`
-/// pages so a corrupt image cannot run away.
-pub fn nand_fat_entries(nand: &[u8]) -> Vec<NandFatEntry> {
-    const MAX_PAGES: usize = 64;
+/// A valid record is identified by the model-specific signature at bytes `[4:6]`
+/// (NC2000 `C0 79`, NC3000 `C0 7A`) and the `A8 A8` trailer.  The signature
+/// check is essential: without it, blank / glyph pages that merely happen to
+/// end in `A8 A8` are mistaken for records (the NC2000 dump otherwise reports
+/// 56 phantom records instead of 28).
+pub fn nand_fat_entries(nand: &[u8], params: &NandFsParams) -> Vec<NandFatEntry> {
+    nand_fat_scan(
+        nand,
+        params.abs_page(params.fat_first_page),
+        64,
+        params.fat_sig,
+    )
+}
+
+/// Low-level FAT scan starting at absolute page `fat_first_page`.
+fn nand_fat_scan(
+    nand: &[u8],
+    fat_first_page: usize,
+    max_pages: usize,
+    sig: [u8; 2],
+) -> Vec<NandFatEntry> {
     let mut out = Vec::new();
     let mut expect_slot: u16 = 1;
-    for page in 0..MAX_PAGES {
-        let base = page * NAND_FULL_PAGE;
+    for page in 0..max_pages {
+        let base = (fat_first_page + page) * NAND_FULL_PAGE;
         if base + NAND_FULL_PAGE > nand.len() {
             break;
         }
@@ -586,6 +717,9 @@ pub fn nand_fat_entries(nand: &[u8]) -> Vec<NandFatEntry> {
         for rec in 0..(512 / 32) {
             let off = base + rec * 32;
             let e = &nand[off..off + 32];
+            if e[4] != sig[0] || e[5] != sig[1] {
+                continue;
+            }
             if e[30] != 0xA8 || e[31] != 0xA8 {
                 continue;
             }
@@ -705,4 +839,399 @@ pub fn nand_directories(nand: &[u8], min_entries: usize) -> Vec<NandDirEntry> {
         }
     }
     out
+}
+
+// ---------------------------------------------------------------------------
+// NC2000 / NC3000 NAND direct file injection
+// ---------------------------------------------------------------------------
+//
+// The firmware-driven pump (see `InjectConfig`) writes a file's *data* pages but
+// never commits the FAT / directory metadata in WQXEmu, so it cannot register a
+// file.  Instead we edit the on-disk NAND image directly — the same approach
+// already used for the NC1020 / PC1000 / CC800.  The format, reverse-engineered
+// from the device dumps, is:
+//
+//   * A contiguous run of data pages holds the file bytes (512 B each, the rest
+//     of the last page is `0xFF`).  The firmware reads a file by spanning
+//     `blocks` pages from the first page listed in its FAT record, so no
+//     per-page spare linkage is required.
+//   * The FAT is a sequence of 32-byte records, one per slot:
+//       [0:2]  slot (LE, 1-based, sequential)
+//       [2:4]  flags  (0x808A for a file, 0xE0FF for a directory)
+//       [4:6]  signature `C0 79`
+//       [8:10] `79 00`  (observed constant in every record)
+//       [14:16] blocks (LE) — number of data pages
+//       [18:30] up to 6 page numbers (LE), terminated by `0xFFFF`:
+//                the first three are `start`, `start+1`, `start+2`; when
+//                `blocks > 3` the fourth is `start + blocks` (the end marker).
+//       [30:32] `A8 A8` trailer
+//   * The root directory lives at a fixed page (31).  Its entries are 16-byte
+//     records: `[0:2]` child slot (LE), `[2:16]` GB2312 / ASCII name,
+//     NUL-terminated.  The root lists the top-level folders (sysdir, 應用程式,
+//     文本文件) and a `..` parent (slot 0).  Adding a file entry here makes it
+//     appear — and launch — from the device's root file list.
+
+/// Geometry of the NC2000 / NC3000 NAND file system.
+#[derive(Debug, Clone, Copy)]
+pub struct NandFsParams {
+    /// Pages that precede the main NAND plane in the *in-memory* image (the
+    /// `nand0` plane).  The on-disk dump omits them, so this is `0` when
+    /// editing a raw dump directly.
+    pub plane_offset: usize,
+    /// Logical page index where the allocation table begins.
+    pub fat_first_page: usize,
+    /// Logical page index of the root directory.
+    pub root_dir_page: usize,
+    /// Two-byte FAT record signature at offset `[4:6]`.  NC2000 uses
+    /// `C0 79`; NC3000 uses `C0 7A`.
+    pub fat_sig: [u8; 2],
+    /// Two-byte constant written at offset `[8:10]` of every FAT record.
+    /// NC2000 uses `79 00`; NC3000 uses `7A 08`.
+    pub fat_const: [u8; 2],
+}
+
+impl NandFsParams {
+    /// Geometry for a model that uses this NAND layout, or `None`.
+    pub fn for_model(model: MachineModel) -> Option<NandFsParams> {
+        match model {
+            MachineModel::Nc2000 => Some(NandFsParams {
+                plane_offset: 64,
+                fat_first_page: 0,
+                root_dir_page: 31,
+                fat_sig: [0xC0, 0x79],
+                fat_const: [0x79, 0x00],
+            }),
+            MachineModel::Nc3000 => Some(NandFsParams {
+                plane_offset: 64,
+                fat_first_page: 0,
+                root_dir_page: 31,
+                fat_sig: [0xC0, 0x7A],
+                fat_const: [0x7A, 0x08],
+            }),
+            _ => None,
+        }
+    }
+    /// Geometry for a raw (plane-stripped) NAND dump: no plane offset.
+    pub fn for_raw(model: MachineModel) -> Option<NandFsParams> {
+        NandFsParams::for_model(model).map(|p| NandFsParams {
+            plane_offset: 0,
+            ..p
+        })
+    }
+    /// Absolute page index inside `nand` for a logical (main-plane) page.
+    pub fn abs_page(&self, logical: usize) -> usize {
+        self.plane_offset + logical
+    }
+}
+
+/// Result of a direct NAND file injection.
+#[derive(Debug, Clone)]
+pub struct NandInjection {
+    /// Allocated or reused slot number.
+    pub slot: u16,
+    /// Logical (main-plane) start page of the file's data.
+    pub start_page: usize,
+    /// Number of NAND pages the file occupies.
+    pub pages: usize,
+    /// Logical page of the root-directory entry that was added/updated.
+    pub dir_page: usize,
+    /// True when an existing file was overwritten in place.
+    pub replaced: bool,
+}
+
+/// All logical pages referenced by the existing FAT (data + directory pages),
+/// plus the FAT region and the root directory page.  Used to avoid clobbering
+/// live data while allocating fresh pages.
+fn nand_reserved_pages(nand: &[u8], params: &NandFsParams) -> std::collections::HashSet<usize> {
+    let mut set = std::collections::HashSet::new();
+    let fat = nand_fat_scan(
+        nand,
+        params.abs_page(params.fat_first_page),
+        8,
+        params.fat_sig,
+    );
+    for e in &fat {
+        for &p in &e.pages {
+            if p != 0xFFFF {
+                set.insert(p as usize);
+            }
+        }
+    }
+    for p in params.fat_first_page..(params.fat_first_page + 8) {
+        set.insert(p);
+    }
+    set.insert(params.root_dir_page);
+    set
+}
+
+/// Find `count` consecutive, fully-blank (0xFF) NAND pages above the highest
+/// used page.  Returns the logical (main-plane) start page, or `None`.
+fn nand_find_free_pages(nand: &[u8], params: &NandFsParams, count: usize) -> Option<usize> {
+    let reserved = nand_reserved_pages(nand, params);
+    let total = nand.len() / NAND_FULL_PAGE;
+    // Floor: start scanning just past the highest referenced page.
+    let floor = reserved.iter().copied().max().unwrap_or(0);
+    let mut run = 0usize;
+    let mut start = None;
+    for lp in (floor + 1)..total {
+        let ap = params.abs_page(lp);
+        if ap * NAND_FULL_PAGE + NAND_FULL_PAGE > nand.len() {
+            break;
+        }
+        if reserved.contains(&lp) {
+            run = 0;
+            start = None;
+            continue;
+        }
+        let seg = &nand[ap * NAND_FULL_PAGE..ap * NAND_FULL_PAGE + NAND_FULL_PAGE];
+        if seg.iter().all(|&b| b == 0xFF) {
+            if start.is_none() {
+                start = Some(lp);
+            }
+            run += 1;
+            if run >= count {
+                return start;
+            }
+        } else {
+            run = 0;
+            start = None;
+        }
+    }
+    None
+}
+
+/// Find the absolute byte offset of the first blank 16-byte record in the root
+/// directory page, or `None` if it is full.
+fn nand_find_free_dir_slot(nand: &[u8], params: &NandFsParams) -> Option<usize> {
+    let ap = params.abs_page(params.root_dir_page);
+    let base = ap * NAND_FULL_PAGE;
+    if base + 512 > nand.len() {
+        return None;
+    }
+    for rec in 0..(512 / 16) {
+        let off = base + rec * 16;
+        if nand[off..off + 16].iter().all(|&b| b == 0xFF) {
+            return Some(off);
+        }
+    }
+    None
+}
+
+/// Find the absolute byte offset of the root-directory entry whose name matches
+/// `name` (case-insensitive), or `None`.
+fn nand_find_dir_slot(nand: &[u8], params: &NandFsParams, name: &str) -> Option<usize> {
+    let ap = params.abs_page(params.root_dir_page);
+    let base = ap * NAND_FULL_PAGE;
+    if base + 512 > nand.len() {
+        return None;
+    }
+    for rec in 0..(512 / 16) {
+        let off = base + rec * 16;
+        let e = &nand[off..off + 16];
+        if e.iter().all(|&b| b == 0xFF) {
+            continue;
+        }
+        let name_field = &e[2..16];
+        let Some(nul) = name_field.iter().position(|&b| b == 0) else {
+            continue;
+        };
+        let raw = &name_field[..nul];
+        let entry_name = nand_name_to_string(raw);
+        if entry_name.eq_ignore_ascii_case(name.trim()) {
+            return Some(off);
+        }
+    }
+    None
+}
+
+/// Read the root directory entries (slot + name) of a NAND image.
+pub fn nand_root_entries(nand: &[u8], params: &NandFsParams) -> Vec<NandDirEntry> {
+    let ap = params.abs_page(params.root_dir_page);
+    let base = ap * NAND_FULL_PAGE;
+    let mut out = Vec::new();
+    if base + 512 > nand.len() {
+        return out;
+    }
+    for rec in 0..(512 / 16) {
+        let off = base + rec * 16;
+        let e = &nand[off..off + 16];
+        if e.iter().all(|&b| b == 0xFF) {
+            continue;
+        }
+        let name_field = &e[2..16];
+        let Some(nul) = name_field.iter().position(|&b| b == 0) else {
+            continue;
+        };
+        let raw = &name_field[..nul];
+        out.push(NandDirEntry {
+            page: params.root_dir_page,
+            slot: u16::from(e[0]) | (u16::from(e[1]) << 8),
+            name: raw.to_vec(),
+        });
+    }
+    out
+}
+
+/// Build the page list stored in a FAT record for a file of `blocks` pages
+/// starting at `start` (see the module docs for the exact layout).
+fn fat_record_pages(start: u16, blocks: u16) -> Vec<u16> {
+    let mut v = Vec::new();
+    for i in 0..blocks.min(3) {
+        v.push(start + i);
+    }
+    if blocks > 3 {
+        v.push(start + blocks);
+    }
+    v
+}
+
+/// Write (or overwrite) the FAT record for `slot`.
+fn write_fat_record(
+    nand: &mut [u8],
+    params: &NandFsParams,
+    slot: u16,
+    blocks: u16,
+    start: u16,
+) -> anyhow::Result<()> {
+    let rec_index = (slot - 1) as usize;
+    let page = params.abs_page(params.fat_first_page) + rec_index / 16;
+    let rec = rec_index % 16;
+    let off = page * NAND_FULL_PAGE + rec * 32;
+    if off + 32 > nand.len() {
+        anyhow::bail!("FAT record for slot {slot} is outside the image");
+    }
+    let e = &mut nand[off..off + 32];
+    e.fill(0xFF);
+    e[0] = (slot & 0xFF) as u8;
+    e[1] = ((slot >> 8) & 0xFF) as u8;
+    e[2] = 0x8A;
+    e[3] = 0x80; // flags 0x808A (file)
+    e[4] = params.fat_sig[0];
+    e[5] = params.fat_sig[1]; // model-specific signature
+    e[8] = params.fat_const[0];
+    e[9] = params.fat_const[1];
+    e[14] = (blocks & 0xFF) as u8;
+    e[15] = ((blocks >> 8) & 0xFF) as u8;
+    let pages = fat_record_pages(start, blocks);
+    for i in 0..6 {
+        if i < pages.len() {
+            e[18 + i * 2] = (pages[i] & 0xFF) as u8;
+            e[19 + i * 2] = ((pages[i] >> 8) & 0xFF) as u8;
+        } else {
+            e[18 + i * 2] = 0xFF;
+            e[19 + i * 2] = 0xFF;
+        }
+    }
+    e[30] = 0xA8;
+    e[31] = 0xA8;
+    Ok(())
+}
+
+/// Write (or overwrite) a root-directory entry at `off` (absolute byte offset
+/// inside `nand`) for `slot` with `name` (GB2312 / ASCII, NUL-terminated).
+fn write_dir_entry(nand: &mut [u8], off: usize, slot: u16, name: &str) -> anyhow::Result<()> {
+    if off + 16 > nand.len() {
+        anyhow::bail!("directory entry is outside the image");
+    }
+    let e = &mut nand[off..off + 16];
+    e.fill(0xFF);
+    e[0] = (slot & 0xFF) as u8;
+    e[1] = ((slot >> 8) & 0xFF) as u8;
+    // Name field is 14 bytes; copy the raw bytes (ASCII or GB2312) and NUL pad.
+    let raw = name.trim().as_bytes();
+    let n = raw.len().min(13);
+    e[2..2 + n].copy_from_slice(&raw[..n]);
+    e[2 + n] = 0;
+    Ok(())
+}
+
+/// Directly add or update a file in the NC2000 / NC3000 NAND file system.
+///
+/// * `params` — geometry (use [`NandFsParams::for_raw`] for a raw dump or
+///   [`NandFsParams::for_model`] for the in-memory image).
+/// * `replace` — when set, an existing root entry whose name matches (or the
+///   injected `name`) is overwritten in place and its old data pages freed.
+///
+/// Returns the slot, data-page span, and directory page that were written.
+pub fn nand_inject(
+    nand: &mut [u8],
+    params: &NandFsParams,
+    name: &str,
+    data: &[u8],
+    replace: Option<&str>,
+) -> anyhow::Result<NandInjection> {
+    let fat = nand_fat_scan(
+        nand,
+        params.abs_page(params.fat_first_page),
+        8,
+        params.fat_sig,
+    );
+    let max_slot = fat.iter().map(|e| e.slot).max().unwrap_or(0);
+    let n_pages = data.len().div_ceil(512).max(1);
+
+    let target_name = replace.unwrap_or(name);
+    let existing_off = nand_find_dir_slot(nand, params, target_name)
+        .or_else(|| nand_find_dir_slot(nand, params, name));
+
+    let (slot, dir_off, replaced) = if let Some(off) = existing_off {
+        // Reuse the existing slot by reading it back from the entry.
+        let e = &nand[off..off + 2];
+        let slot = u16::from(e[0]) | (u16::from(e[1]) << 8);
+        (slot, off, true)
+    } else {
+        // The FAT scan window is 8 pages x 16 records = 128 slots (slots are
+        // 1-based, so the highest allocatable slot is 128).
+        if max_slot >= 128 {
+            anyhow::bail!("FAT is full (slot {max_slot}); cannot allocate a new file");
+        }
+        let slot = max_slot + 1;
+        let off = nand_find_free_dir_slot(nand, params)
+            .ok_or_else(|| anyhow::anyhow!("root directory page is full"))?;
+        (slot, off, false)
+    };
+
+    // Free the old data pages when replacing (the FAT record is rewritten next).
+    if replaced {
+        if let Some(old) = fat.iter().find(|e| e.slot == slot) {
+            for &p in &old.pages {
+                if p != 0xFFFF {
+                    let ap = params.abs_page(p as usize);
+                    let s = ap * NAND_FULL_PAGE;
+                    if s + NAND_FULL_PAGE <= nand.len() {
+                        nand[s..s + NAND_FULL_PAGE].fill(0xFF);
+                    }
+                }
+            }
+        }
+    }
+
+    // Allocate a contiguous run of fresh data pages.
+    let start_logical = nand_find_free_pages(nand, params, n_pages)
+        .ok_or_else(|| anyhow::anyhow!("no {n_pages} contiguous blank NAND pages available"))?;
+
+    // Write the data pages (512 B each; the last page is padded with 0xFF).
+    for i in 0..n_pages {
+        let ap = params.abs_page(start_logical + i);
+        let s = ap * NAND_FULL_PAGE;
+        let end = ((i + 1) * 512).min(data.len());
+        let chunk = &data[i * 512..end];
+        nand[s..s + chunk.len()].copy_from_slice(chunk);
+        for b in nand[s + chunk.len()..s + 512].iter_mut() {
+            *b = 0xFF;
+        }
+        // Spare area: mark the page as a written data page (mirrors the dumps).
+        nand[s + 512 + 10] = 0xAA;
+        nand[s + 512 + 11] = 0x00;
+    }
+
+    write_fat_record(nand, params, slot, n_pages as u16, start_logical as u16)?;
+    write_dir_entry(nand, dir_off, slot, name)?;
+
+    Ok(NandInjection {
+        slot,
+        start_page: start_logical,
+        pages: n_pages,
+        dir_page: params.root_dir_page,
+        replaced,
+    })
 }
