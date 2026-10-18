@@ -231,12 +231,49 @@ fn gffs_entry_name(nor: &[u8], off: usize) -> Option<String> {
     if e[2..18].iter().all(|&b| b == 0xFF) {
         return None;
     }
-    let s = String::from_utf8_lossy(&e[2..18]).trim_end().to_string();
+    // Names are ASCII or GB2312.  Keep ASCII verbatim and escape anything
+    // else as \xNN so a name stays unambiguous (and round-trips for --replace).
+    let mut s = String::new();
+    for &b in &e[2..18] {
+        if b == 0x20 || b == 0x00 {
+            if s.ends_with(' ') || s.is_empty() {
+                continue;
+            }
+            s.push(' ');
+        } else if (0x21..0x7F).contains(&b) {
+            s.push(b as char);
+        } else {
+            s.push_str(&format!("\\x{b:02X}"));
+        }
+    }
+    let s = s.trim().to_string();
     if s.is_empty() {
         None
     } else {
         Some(s)
     }
+}
+
+/// List every user file of an NC1020 GFFS image by scanning all directory
+/// blocks (the app list lives in 0x21000, saves in 0x27000, ...).
+fn gffs_list_nc1020(nor: &[u8]) -> Vec<(usize, String, u32, u16)> {
+    let mut out = Vec::new();
+    for blk in [0x21000usize, 0x22000, 0x23000, 0x24000, 0x27000] {
+        let end = (blk + 0x1000).min(nor.len());
+        let mut o = blk;
+        while o + 32 <= end {
+            if let Some(n) = gffs_entry_name(nor, o) {
+                let e = &nor[o..o + 32];
+                let len = u32::from(e[24]) | (u32::from(e[25]) << 8);
+                let start = u16::from(e[26]) | (u16::from(e[27]) << 8);
+                if start != 0xFFFF && len != 0xFFFF {
+                    out.push((o, n, len, start));
+                }
+            }
+            o += 32;
+        }
+    }
+    out
 }
 
 /// Plan/execute a direct GFFS injection into a nc1020 logical NOR image.
@@ -563,21 +600,31 @@ fn main() -> Result<()> {
                     );
                     Ok(())
                 }
-                _ => {
-                    let emu = build_emulator(model, &rom_dir)?;
-                    let entries = emu.gffs_list();
-                    println!(
-                        "GFFS user-directory entries for {} ({}):",
-                        model.name(),
-                        entries.len()
-                    );
-                    for e in &entries {
+                MachineModel::Nc1020 => {
+                    let files = RomFiles::from_dir(&rom_dir)?;
+                    let nor_path = files.nor.context("no NOR dump found in --rom-dir")?;
+                    let raw = std::fs::read(&nor_path)?;
+                    let logical = nc1020_swap(&raw);
+                    let entries = gffs_list_nc1020(&logical);
+                    println!("GFFS entries for nc1020 ({}):", entries.len());
+                    for (off, name, len, start) in &entries {
                         println!(
-                            "  {:<16} len={:5} start=0x{:04X}",
-                            e.name, e.length, e.start
+                            "  {:<16} len={:5} start=0x{:04X} data=0x{:05X} dir=0x{:05X}",
+                            name,
+                            len,
+                            start,
+                            (*start as usize) << 8,
+                            off
                         );
                     }
                     Ok(())
+                }
+                _ => {
+                    bail!(
+                        "{} keeps its file system in NAND; listing is not supported yet \
+                         (nc1020/pc1000/cc800 are)",
+                        model.name()
+                    )
                 }
             }
         }

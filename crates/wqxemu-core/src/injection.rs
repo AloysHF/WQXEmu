@@ -445,3 +445,91 @@ pub fn block_inject(
         replaced,
     })
 }
+
+// ---------------------------------------------------------------------------
+// NC2000 / NC3000 (NAND) — status
+// ---------------------------------------------------------------------------
+//
+// These models keep both the system and the user files in NAND (512+16 byte
+// pages).  The NC2000 dump `nc2000.nand` is 65536 x 528 bytes; the NC3000 one
+// is 131008 x 528 (pages 64.. are stored, the first 64 pages live in the
+// separate `nand0` plane / are synthesised).
+//
+// The very first NAND page is a **file allocation table** made of 32-byte
+// records with a `A8 A8` trailer, e.g.:
+//
+//   01 00 | BA 80 C0 79 00 00 79 00 00 00 00 00 | 01 00 | 00 00 |
+//   B3 05 | FF .. | A8 A8
+//   ^slot ^header fields                      ^count ^?    ^page ptrs
+//
+// Slots are numbered sequentially (`01 00`, `02 00`, ... `10 00` per page),
+// and the tail of each record holds 16-bit NAND page numbers terminated by
+// `FF FF`.  What is still unknown is how a record maps to a *name* (the names
+// do not appear next to the FAT — they live in the directory pages that the
+// firmware reads separately), and how chains longer than one record continue.
+// Cracking those two points is what remains for NC2000/NC3000 support; the
+// rest of the pipeline (per-model `save_nand`, `debug_nand_window`, a NAND
+// counterpart of `block_inject`) can then mirror the NC1020 implementation.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn blank_nor() -> Vec<u8> {
+        vec![0xFF; 16 * BLOCK_BANK_SIZE]
+    }
+
+    #[test]
+    fn block_inject_adds_and_lists_a_file() {
+        let mut nor = blank_nor();
+        let payload = vec![0xA9, 0x00, 0x85, 0x40];
+        let info = block_inject(&mut nor, "GAME.BIN", &payload, None).unwrap();
+        assert_eq!(info.bank, BLOCK_BANK_FIRST);
+        assert_eq!(info.banks, 1);
+        assert!(!info.replaced);
+
+        let entries = block_entries(&nor);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "GAME.BIN");
+        assert_eq!(entries[0].bank, BLOCK_BANK_FIRST);
+        assert_eq!(entries[0].length, payload.len());
+        assert_eq!(
+            &nor[BLOCK_BANK_FIRST * BLOCK_BANK_SIZE + BLOCK_HEADER_SIZE + 0..][..4],
+            &payload[..]
+        );
+    }
+
+    #[test]
+    fn block_inject_spans_banks_and_replace_reuses_them() {
+        let mut nor = blank_nor();
+        let big = vec![0x42; BLOCK_BANK_SIZE + 100];
+        let info = block_inject(&mut nor, "BIG.BIN", &big, None).unwrap();
+        assert_eq!(info.banks, 2);
+        assert_eq!(block_entries(&nor)[0].banks, 2);
+
+        // Replacing with a smaller file keeps the same starting bank.
+        let small = vec![0x11; 16];
+        let info = block_inject(&mut nor, "SMALL.BIN", &small, Some("BIG.BIN")).unwrap();
+        assert!(info.replaced);
+        assert_eq!(info.bank, BLOCK_BANK_FIRST);
+        assert_eq!(info.banks, 1);
+        let entries = block_entries(&nor);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "SMALL.BIN");
+        // The second bank must have been released back to 0xFF.
+        let second = (BLOCK_BANK_FIRST + 1) * BLOCK_BANK_SIZE;
+        assert!(nor[second..second + BLOCK_BANK_SIZE]
+            .iter()
+            .all(|&b| b == 0xFF));
+    }
+
+    #[test]
+    fn block_inject_reports_when_full() {
+        let mut nor = blank_nor();
+        for i in 0..(BLOCK_BANK_LAST - BLOCK_BANK_FIRST + 1) {
+            block_inject(&mut nor, &format!("F{i}.BIN"), &[0x55; 8], None).unwrap();
+        }
+        let err = block_inject(&mut nor, "NEXT.BIN", &[0x55; 8], None).unwrap_err();
+        assert!(err.to_string().contains("no free"));
+    }
+}
