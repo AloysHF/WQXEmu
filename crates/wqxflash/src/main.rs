@@ -310,11 +310,155 @@ fn gffs_entry_name(nor: &[u8], off: usize) -> Option<String> {
     }
 }
 
-/// List every user file of an NC1020 GFFS image by scanning all directory
-/// blocks (the app list lives in 0x21000, saves in 0x27000, ...).
-fn gffs_list_nc1020(nor: &[u8]) -> Vec<(usize, String, u32, u16)> {
+// --- NC1020 GFFS (Wenquxing FlashSX) physical layout -----------------------
+//
+// Logical NOR (after the 16 KB half-swap) is 512 KiB organised as 128 × 4 KiB
+// clusters.  A 128-entry allocation table — the "WQXFlashSX" superblock —
+// lives at logical 0x23000; its four-byte entry at index `i` *is* physical
+// cluster `i` (physical address = i * 0x1000).  Entry format:
+//     byte0 = group id          (0x04 = the factory user-data volume)
+//     byte1 = 0x5E (marker)
+//     byte2 = cluster id within the group
+//     byte3 = status            (0xC2 = user-data cluster, 1 = system)
+// A free cluster is the all-0xFF entry.  Crucially the table carries **no
+// physical pointer**: the firmware finds a file's bytes by scanning for the
+// (group, clusterid) pair carried in the directory entry's `start` field, then
+// using that slot index as the physical cluster.  A file occupies a contiguous
+// run of *slots* starting at the matched slot (the firmware reads the run by
+// walking consecutive clusterids).
+//
+// Directory entries (32 bytes) live in the entry area from 0x22000:
+//     [0:2]   file-type header (DFC8 = .bin, FF09 = .bas)
+//     [2:18]  GB2312/ASCII name, space padded
+//     [18:24] 79 00 00 FF FF FF  (separator)
+//     [24:26] length in bytes (little endian)
+//     [26:28] start = (group << 8) | clusterid (little endian)
+//     [28:32] 00 FF FF FF
+const GFFS_CLUSTER: usize = 0x1000;
+const GFFS_NCLUST: usize = 128;
+const GFFS_SUPERBLOCK: usize = 0x23010;
+const GFFS_ENTRY_BLOCKS: &[usize] = &[0x22000usize, 0x24000, 0x25000, 0x26000];
+
+/// Cluster slots 32..=38 (physical 0x20000..=0x26FFF) hold the GFFS system
+/// structures: settings (0x20000), the category table (0x21000), the
+/// directory entry blocks (0x22000 / 0x24000 / 0x25000 / 0x26000) and the
+/// superblock (0x23000).  Some of these slots are still all-0xFF in a factory
+/// image — notably slot 37 == 0x25000 — but they are directory blocks, not
+/// spare space.  Allocating one for payload data makes the firmware (and `ls`)
+/// re-parse the file contents as directory entries, showing phantom entries.
+const GFFS_RESERVED_SLOTS: std::ops::RangeInclusive<usize> = 0x20usize..=0x26;
+
+/// Scan the superblock and return the physical cluster index (0..128) for the
+/// given (group, clusterid), or None if no such allocation exists.
+fn gffs_slot_for(nor: &[u8], group: u8, cid: u8) -> Option<usize> {
+    for i in 0..GFFS_NCLUST {
+        let o = GFFS_SUPERBLOCK + i * 4;
+        if nor[o] == group && nor[o + 1] == 0x5E && nor[o + 2] == cid {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// Indices of clusters whose superblock entry is still all-0xFF.
+fn gffs_free_clusters(nor: &[u8]) -> Vec<usize> {
+    let mut v = Vec::new();
+    for i in 0..GFFS_NCLUST {
+        if GFFS_RESERVED_SLOTS.contains(&i) {
+            continue;
+        }
+        let o = GFFS_SUPERBLOCK + i * 4;
+        if nor[o..o + 4] == [0xFF, 0xFF, 0xFF, 0xFF] {
+            v.push(i);
+        }
+    }
+    v
+}
+
+/// Largest clusterid currently used within `group` (so new runs don't collide).
+fn gffs_max_cid(nor: &[u8], group: u8) -> u8 {
+    let mut m = 0u8;
+    for i in 0..GFFS_NCLUST {
+        let o = GFFS_SUPERBLOCK + i * 4;
+        if nor[o] == group && nor[o + 1] == 0x5E {
+            m = m.max(nor[o + 2]);
+        }
+    }
+    m
+}
+
+/// Mark a run of cluster slots free again in the superblock.
+fn gffs_free_run(nor: &mut [u8], slots: &[usize]) {
+    for &s in slots {
+        let o = GFFS_SUPERBLOCK + s * 4;
+        nor[o..o + 4].copy_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
+    }
+}
+
+/// Allocate `n` clusters in `group`, writing superblock entries.  Returns the
+/// ordered list of physical slot indices (ascending, physically contiguous) and
+/// the first clusterid.  Clusterids are assigned in the same order as the slots,
+/// so the run is physically contiguous *and* the cid sequence matches the slot
+/// sequence — robust whether the firmware scans the superblock by (group, cid)
+/// or assumes within-group physical contiguity.  We pick the lowest available
+/// contiguous run.
+fn gffs_alloc_run(nor: &mut [u8], group: u8, n: usize) -> anyhow::Result<(Vec<usize>, u8)> {
+    let free = gffs_free_clusters(nor);
+    anyhow::ensure!(
+        free.len() >= n,
+        "not enough free GFFS clusters (need {n}, have {})",
+        free.len()
+    );
+    // Find the lowest run of `n` contiguous free slots.
+    let mut pick: Option<Vec<usize>> = None;
+    let mut run: Vec<usize> = Vec::new();
+    for &s in &free {
+        if let Some(&last) = run.last() {
+            if s == last + 1 {
+                run.push(s);
+            } else {
+                run = vec![s];
+            }
+        } else {
+            run = vec![s];
+        }
+        if run.len() == n {
+            pick = Some(run.clone());
+            break;
+        }
+    }
+    let pick = pick.context("no contiguous run of free GFFS clusters (defragment needed)")?;
+    let start_cid = gffs_max_cid(nor, group).wrapping_add(1);
+    for (k, &s) in pick.iter().enumerate() {
+        let o = GFFS_SUPERBLOCK + s * 4;
+        nor[o] = group;
+        nor[o + 1] = 0x5E;
+        nor[o + 2] = start_cid.wrapping_add(k as u8);
+        nor[o + 3] = 0xC2;
+    }
+    Ok((pick, start_cid))
+}
+
+/// Find the first all-0xFF 32-byte directory slot in the entry area.
+fn gffs_free_entry_slot(nor: &[u8]) -> anyhow::Result<usize> {
+    for &blk in GFFS_ENTRY_BLOCKS {
+        let end = (blk + 0x1000).min(nor.len());
+        let mut o = blk + 0x20; // skip the header slot at the block start
+        while o + 32 <= end {
+            if nor[o..o + 32].iter().all(|&b| b == 0xFF) {
+                return Ok(o);
+            }
+            o += 32;
+        }
+    }
+    anyhow::bail!("no free GFFS directory slot in the application entry area")
+}
+
+/// List every user file of an NC1020 GFFS image and resolve its physical
+/// cluster via the superblock.
+fn gffs_list_nc1020(nor: &[u8]) -> Vec<(usize, String, u32, u16, usize)> {
     let mut out = Vec::new();
-    for blk in [0x21000usize, 0x22000, 0x23000, 0x24000, 0x27000] {
+    for &blk in GFFS_ENTRY_BLOCKS {
         let end = (blk + 0x1000).min(nor.len());
         let mut o = blk;
         while o + 32 <= end {
@@ -322,8 +466,13 @@ fn gffs_list_nc1020(nor: &[u8]) -> Vec<(usize, String, u32, u16)> {
                 let e = &nor[o..o + 32];
                 let len = u32::from(e[24]) | (u32::from(e[25]) << 8);
                 let start = u16::from(e[26]) | (u16::from(e[27]) << 8);
-                if start != 0xFFFF && len != 0xFFFF {
-                    out.push((o, n, len, start));
+                if start != 0xFFFF && len != 0xFFFF && len > 0 {
+                    let group = (start >> 8) as u8;
+                    let cid = (start & 0xFF) as u8;
+                    let phys = gffs_slot_for(nor, group, cid)
+                        .map(|s| s * GFFS_CLUSTER)
+                        .unwrap_or(0);
+                    out.push((o, n, len, start, phys));
                 }
             }
             o += 32;
@@ -333,80 +482,120 @@ fn gffs_list_nc1020(nor: &[u8]) -> Vec<(usize, String, u32, u16)> {
 }
 
 /// Plan/execute a direct GFFS injection into a nc1020 logical NOR image.
+///
+/// Writes the 32-byte directory entry into the entry area (0x22000) and the
+/// payload into the correct physical cluster(s), updating the WQXFlashSX
+/// superblock so the firmware can locate the data.  The cluster → physical
+/// mapping is:
+///   * superblock entry at index `i` (logical 0x23010 + i*4) == physical
+///     cluster `i`  (physical address = i * 0x1000);
+///   * the directory entry's `start` = (group << 8) | clusterid;
+///   * the firmware scans the superblock for that (group, clusterid) to find
+///     the physical slot, then reads a contiguous run of clusterids.
+///
+/// This produces structurally valid GFFS storage.
+///
+/// Note on launcher visibility: the firmware's built-in "应用程序" (0x0E) and
+/// "游戏" (0x09) menus do *not* enumerate the GFFS directory, so an injected
+/// file cannot be made to appear in either one.  Evidence:
+///
+///   * A NOR read trace of the 0x0E handler shows it touching only the 0x21000
+///     category table (via the generic copy helper at $D104) and never the
+///     0x22000 entry area.  After the key press the display cache at $3000 holds
+///     exactly one record — the 应用程序 *category* itself (type 0xFFC0,
+///     start=0x0300) — with the count at $1125 = 1.
+///   * Tagging the injected file's data as group 0x03 instead of 0x04 produces a
+///     byte-identical result, confirming the menu selects on category, not on
+///     the entry's group tag.
+///   * The 0x09 menu draws its ten built-in titles from a hardcoded list at
+///     $7B8F and reads no GFFS structure at all.
+///
+/// Injected files remain reachable from a file-manager / LAVA application that
+/// browses the GFFS directory.
 fn gffs_inject_nc1020(nor: &mut [u8], name: &str, data: &[u8], header: u16) -> anyhow::Result<()> {
-    const BLOCK: usize = 0x21000;
     if data.len() > 0xFFFF {
         anyhow::bail!("file too large for GFFS (max 65535 bytes)");
     }
     let len = data.len();
+    let nclust = len.div_ceil(GFFS_CLUSTER);
+    // File *data* lives in the factory user-data volume (group 0x04, superblock
+    // slots 96..116).  The 32-byte directory entry is written separately into
+    // the entry area (0x22000) and its `start` field is tagged with this same
+    // group, which is how the orphan factory entry (黄金英雄坛说.bin,
+    // start=0x0401) is laid out.  Group 0x03 is the entry area's own volume
+    // (a single cluster) and must not be used for payload data.
+    let group: u8 = 0x04;
 
-    // Collect used data ranges from all directory blocks so we don't clobber
-    // an existing file's allocation (including its FF padding tail).
-    let mut used: Vec<(usize, usize)> = Vec::new();
-    for blk in [0x21000usize, 0x22000, 0x23000, 0x24000, 0x27000] {
+    // Locate an existing entry with the same name (update path).
+    let mut existing: Option<(usize, u8, u8)> = None; // (slot_off, group, first_cid)
+    'outer: for &blk in GFFS_ENTRY_BLOCKS {
         let end = (blk + 0x1000).min(nor.len());
         let mut o = blk;
-        while o + 32 <= end {
-            let e = &nor[o..o + 32];
-            if e[30] == 0xFF && e[31] == 0xFF && !e[2..18].iter().all(|&b| b == 0xFF) {
-                let ln = e[24] as usize | (e[25] as usize) << 8;
-                let st = e[26] as usize | (e[27] as usize) << 8;
-                if st != 0xFFFF && ln != 0xFFFF && ln > 0 {
-                    used.push((st << 8, ln));
-                }
-            }
-            o += 32;
-        }
-    }
-
-    // Find an existing entry with the same name (update) in the app block.
-    let mut existing_slot: Option<(usize, usize, usize)> = None; // (off, start_off, old_len)
-    {
-        let end = (BLOCK + 0x1000).min(nor.len());
-        let mut o = BLOCK;
         while o + 32 <= end {
             if let Some(n) = gffs_entry_name(nor, o) {
                 if n.eq_ignore_ascii_case(name.trim()) {
                     let e = &nor[o..o + 32];
-                    let st = e[26] as usize | (e[27] as usize) << 8;
-                    let ln = e[24] as usize | (e[25] as usize) << 8;
-                    existing_slot = Some((o, st << 8, ln));
-                    break;
+                    let st = u16::from(e[26]) | (u16::from(e[27]) << 8);
+                    existing = Some((o, (st >> 8) as u8, (st & 0xFF) as u8));
+                    break 'outer;
                 }
             }
             o += 32;
         }
     }
 
-    let (slot_off, data_off, start) = if let Some((slot, old_off, old_len)) = existing_slot {
-        if len <= old_len && old_off + len <= nor.len() {
-            // Reuse the existing allocation in place.
-            nor[old_off..old_off + len].copy_from_slice(data);
-            (slot, old_off, (old_off >> 8) as u16)
-        } else {
-            let data_off = find_free_data(nor, len, &used)?;
-            nor[data_off..data_off + len].copy_from_slice(data);
-            (slot, data_off, (data_off >> 8) as u16)
-        }
-    } else {
-        // Allocate a free directory slot (skip +0x000) and free data.
-        let end = (BLOCK + 0x1000).min(nor.len());
-        let mut free_slot = None;
-        let mut o = BLOCK + 0x20;
-        while o + 32 <= end {
-            if nor[o..o + 32].iter().all(|&b| b == 0xFF) {
-                free_slot = Some(o);
+    // Resolve / allocate the cluster run.  Returns the entry slot and the
+    // ordered physical slot indices of the file's clusters.
+    let (slot_off, slots): (usize, Vec<usize>) = if let Some((so, eg, ec)) = existing {
+        let base = gffs_slot_for(nor, eg, ec)
+            .context("existing entry references an unallocated cluster")?;
+        let mut reuse = true;
+        for k in 0..nclust {
+            let s = base + k;
+            if s >= GFFS_NCLUST {
+                reuse = false;
                 break;
             }
-            o += 32;
+            let o = GFFS_SUPERBLOCK + s * 4;
+            if nor[o] != eg || nor[o + 1] != 0x5E || nor[o + 2] != ec.wrapping_add(k as u8) {
+                reuse = false;
+                break;
+            }
         }
-        let slot = free_slot.context("no free GFFS directory slot in block 0x21000")?;
-        let data_off = find_free_data(nor, len, &used)?;
-        nor[data_off..data_off + len].copy_from_slice(data);
-        (slot, data_off, (data_off >> 8) as u16)
+        if reuse {
+            (so, (0..nclust).map(|k| base + k).collect())
+        } else {
+            // Free the old run, then allocate a fresh one.
+            let mut old = Vec::new();
+            for k in 0..GFFS_NCLUST {
+                let o = GFFS_SUPERBLOCK + k * 4;
+                if nor[o] == eg && nor[o + 1] == 0x5E && nor[o + 2] >= ec {
+                    old.push(k);
+                }
+            }
+            gffs_free_run(nor, &old);
+            let (run, _) = gffs_alloc_run(nor, group, nclust)?;
+            (so, run)
+        }
+    } else {
+        let (run, _) = gffs_alloc_run(nor, group, nclust)?;
+        let slot = gffs_free_entry_slot(nor)?;
+        (slot, run)
     };
 
-    // Build the 32-byte directory entry.
+    // Write the payload, one cluster at a time, into each physical slot.
+    for (k, &s) in slots.iter().enumerate() {
+        let cbase = s * GFFS_CLUSTER;
+        let src = k * GFFS_CLUSTER;
+        let take = (len - src).min(GFFS_CLUSTER);
+        nor[cbase..cbase + take].copy_from_slice(&data[src..src + take]);
+    }
+
+    // Build and write the 32-byte directory entry.
+    let first_cid = {
+        let o = GFFS_SUPERBLOCK + slots[0] * 4;
+        nor[o + 2]
+    };
     let mut e = [0u8; 32];
     e[0] = (header & 0xFF) as u8;
     e[1] = (header >> 8) as u8;
@@ -418,6 +607,7 @@ fn gffs_inject_nc1020(nor: &mut [u8], name: &str, data: &[u8], header: u16) -> a
     e[18..24].copy_from_slice(&[0x79, 0x00, 0x00, 0xFF, 0xFF, 0xFF]);
     e[24] = (len & 0xFF) as u8;
     e[25] = ((len >> 8) & 0xFF) as u8;
+    let start = ((group as u16) << 8) | (first_cid as u16);
     e[26] = (start & 0xFF) as u8;
     e[27] = ((start >> 8) & 0xFF) as u8;
     e[28] = 0x00;
@@ -426,29 +616,11 @@ fn gffs_inject_nc1020(nor: &mut [u8], name: &str, data: &[u8], header: u16) -> a
     e[31] = 0xFF;
     nor[slot_off..slot_off + 32].copy_from_slice(&e);
     log::info!(
-        "GFFS inject: slot=0x{slot_off:05X} data=0x{data_off:05X} len={len} start=0x{start:04X} hdr=0x{header:04X}"
+        "GFFS inject: slot=0x{slot_off:05X} group=0x{group:02X} first_cid=0x{first_cid:02X} \
+         clusters={:?} len={len} hdr=0x{header:04X}",
+        slots
     );
     Ok(())
-}
-
-fn find_free_data(nor: &[u8], len: usize, used: &[(usize, usize)]) -> anyhow::Result<usize> {
-    // Start high (above the system program and existing data) to avoid
-    // clobbering the firmware's system-program area (which triggers the
-    // "升级系统程序" recovery screen).
-    let mut off = 0xA0000usize;
-    while off + len <= nor.len() {
-        // Skip the directory/superblock window.
-        if (0x20000..0x29000).contains(&off) {
-            off = 0x29000;
-            continue;
-        }
-        let overlaps = used.iter().any(|&(u, ul)| off < u + ul && u < off + len);
-        if !overlaps && nor[off..off + len].iter().all(|&b| b == 0xFF) {
-            return Ok(off);
-        }
-        off += 0x100;
-    }
-    anyhow::bail!("no free data region of {len} bytes found");
 }
 
 /// PC1000/CC800 dumps may be stored half-swapped inside each 32 KB bank. The
@@ -761,14 +933,10 @@ fn main() -> Result<()> {
                     let logical = nc1020_swap(&raw);
                     let entries = gffs_list_nc1020(&logical);
                     println!("GFFS entries for nc1020 ({}):", entries.len());
-                    for (off, name, len, start) in &entries {
+                    for (off, name, len, start, phys) in &entries {
                         println!(
                             "  {:<16} len={:5} start=0x{:04X} data=0x{:05X} dir=0x{:05X}",
-                            name,
-                            len,
-                            start,
-                            (*start as usize) << 8,
-                            off
+                            name, len, start, phys, off
                         );
                     }
                     Ok(())
@@ -1080,5 +1248,99 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A pristine (all-0xFF) logical NOR image with room for the GFFS structures.
+    fn blank_nor() -> Vec<u8> {
+        vec![0xFFu8; 0x80000]
+    }
+
+    /// Tag a superblock slot as in-use: `[group] 5E [cid] C2`.
+    fn mark_used(nor: &mut [u8], slot: usize, group: u8, cid: u8) {
+        let o = GFFS_SUPERBLOCK + slot * 4;
+        nor[o] = group;
+        nor[o + 1] = 0x5E;
+        nor[o + 2] = cid;
+        nor[o + 3] = 0xC2;
+    }
+
+    /// An image laid out like the factory dump: slots 0..=31 tagged 0xFF
+    /// (unusable), 32..=36 / 38 holding the per-category volumes, and —
+    /// crucially — slot 37 (0x25000) left all-0xFF.  Slot 37 is a directory
+    /// entry block that merely *looks* free; handing it out corrupts the
+    /// directory, which is exactly the bug this guards against.
+    fn factory_like_nor() -> Vec<u8> {
+        let mut nor = blank_nor();
+        for s in 0..=31 {
+            mark_used(&mut nor, s, 0xFF, 0xFF);
+        }
+        mark_used(&mut nor, 32, 0x01, 0x00); // settings
+        mark_used(&mut nor, 33, 0x00, 0x00); // category table
+        mark_used(&mut nor, 34, 0x03, 0x00); // application entry area
+        mark_used(&mut nor, 36, 0x05, 0x00); // GMUD
+        mark_used(&mut nor, 38, 0x02, 0x00);
+        nor
+    }
+
+    /// Payload bytes chosen so they would parse as a bogus directory entry if the
+    /// allocator ever placed file data inside one of the entry blocks.
+    #[test]
+    fn gffs_inject_never_allocates_reserved_system_clusters() {
+        let mut nor = factory_like_nor();
+        let payload = b"HELLO.BAS\x00\x00\x00\x00\x01\x04\x01\x00";
+        gffs_inject_nc1020(&mut nor, "HELLO.BAS", payload, 0xFF09).unwrap();
+
+        // Data must not land on any directory entry block (slots 32..=38).
+        let listed = gffs_list_nc1020(&nor);
+        assert_eq!(listed.len(), 1, "phantom/extra entries: {listed:?}");
+
+        let (_o, name, _len, start, phys) = &listed[0];
+        assert_eq!(name, "HELLO.BAS");
+        assert_eq!(
+            (*start >> 8) as u8,
+            0x04,
+            "entry must tag the user-data volume"
+        );
+        for &blk in GFFS_ENTRY_BLOCKS {
+            assert!(
+                *phys < blk || *phys >= blk + 0x1000,
+                "payload at {phys:#X} overlaps directory entry block {blk:#X}"
+            );
+        }
+        assert!(
+            !GFFS_RESERVED_SLOTS.contains(&(*phys / GFFS_CLUSTER)),
+            "payload cluster {} is a reserved system cluster",
+            *phys / GFFS_CLUSTER
+        );
+        // First usable cluster past the reserved system area: slot 39 = 0x27000.
+        assert_eq!(
+            *phys, 0x27000,
+            "payload should land on the first non-reserved cluster"
+        );
+    }
+
+    /// The allocator must skip the reserved slots even though a factory image
+    /// leaves slot 37 (0x25000) all-0xFF, i.e. "free" but a directory block.
+    #[test]
+    fn gffs_free_clusters_excludes_reserved_slots() {
+        let nor = factory_like_nor();
+        let free = gffs_free_clusters(&nor);
+        for s in &free {
+            assert!(
+                !GFFS_RESERVED_SLOTS.contains(s),
+                "slot {s} is reserved but reported free"
+            );
+        }
+        // Lowest free slot must be the first one past the system area.
+        assert_eq!(
+            free[0], 0x27,
+            "expected first free slot 39, got {}",
+            free[0]
+        );
     }
 }
