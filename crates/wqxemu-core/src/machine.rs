@@ -427,6 +427,22 @@ pub trait Machine: Send {
         Vec::new()
     }
 
+    /// Debug helper: `(pc, nor_offset)` pairs for NOR reads in the GFFS region
+    /// (0x20000..0x30000) captured since boot. Empty unless the model implements
+    /// it and `WQX_NORTRACE_PC` was set. Used to reverse-engineer how the
+    /// firmware maps a GFFS entry's `start` field to physical NOR bytes.
+    fn debug_nor_read_trace(&self) -> Vec<(u16, u32)> {
+        Vec::new()
+    }
+
+    /// Debug helper: toggle whether `debug_nor_read_trace` keeps recording.
+    /// Lets a frontend capture only a specific interaction (e.g. opening the
+    /// application menu) instead of the entire boot sequence.
+    fn debug_nor_read_trace_set_active(&mut self, _active: bool) {}
+
+    /// Debug helper: discard the captured `debug_nor_read_trace` history.
+    fn debug_nor_read_trace_clear(&mut self) {}
+
     /// Debug helper: fill the whole NOR image with `val` (e.g. 0xFF to simulate
     /// a blank/unformatted flash). Used to trigger the firmware's formatter.
     fn debug_fill_nor(&mut self, _val: u8) {}

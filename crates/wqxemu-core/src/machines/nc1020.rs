@@ -34,11 +34,20 @@ pub struct Nc1020Machine {
     nor: Vec<u8>,
     #[serde(skip)]
     injection: InjectionBridge,
+    #[serde(skip)]
+    nor_read_map: Option<Vec<u8>>,
+    #[serde(skip)]
+    nor_read_trace: Option<Vec<(u16, u32)>>,
+    #[serde(skip)]
+    nor_trace_active: bool,
+    #[serde(skip)]
+    nor_trace_full: bool,
 }
 
 impl Nc1020Machine {
     /// Create the machine and load its ROM / NOR files.
     pub fn new(files: &RomFiles) -> Result<Self> {
+        let trace_pc = std::env::var_os("WQX_NORTRACE_PC").is_some();
         let mut machine = Self {
             memory: Memory::new(),
             input: Input::new(),
@@ -49,6 +58,14 @@ impl Nc1020Machine {
             rom: vec![0; ROM_SIZE],
             nor: vec![0; NOR_SIZE],
             injection: InjectionBridge::new(),
+            nor_read_map: if std::env::var_os("WQX_NORTRACE").is_some() {
+                Some(vec![0u8; NOR_SIZE / 64])
+            } else {
+                None
+            },
+            nor_read_trace: if trace_pc { Some(Vec::new()) } else { None },
+            nor_trace_active: trace_pc,
+            nor_trace_full: std::env::var_os("WQX_NORTRACE_ALL").is_some(),
         };
 
         if let Some(rom_path) = &files.rom {
@@ -221,6 +238,24 @@ impl Machine for Nc1020Machine {
         self.nor.fill(val);
     }
 
+    fn debug_nor_read_map(&self) -> Vec<u8> {
+        self.nor_read_map.clone().unwrap_or_default()
+    }
+
+    fn debug_nor_read_trace(&self) -> Vec<(u16, u32)> {
+        self.nor_read_trace.clone().unwrap_or_default()
+    }
+
+    fn debug_nor_read_trace_set_active(&mut self, active: bool) {
+        self.nor_trace_active = active;
+    }
+
+    fn debug_nor_read_trace_clear(&mut self) {
+        if let Some(tr) = self.nor_read_trace.as_mut() {
+            tr.clear();
+        }
+    }
+
     fn flash_stats(&self) -> (u32, u32, u32) {
         (
             self.flash.write_calls,
@@ -230,7 +265,10 @@ impl Machine for Nc1020Machine {
     }
 
     fn gffs_entries(&self) -> Vec<crate::injection::GffsEntry> {
-        crate::injection::gffs_parse_dir(&self.nor, 0x27000)
+        // The application entry area lives at 0x22000 (category list at
+        // 0x21000) in this firmware build — same area the offline injector
+        // writes to.
+        crate::injection::gffs_parse_dir(&self.nor, 0x22000)
     }
 
     fn is_sleeping(&self) -> bool {
@@ -248,6 +286,14 @@ impl Machine for Nc1020Machine {
             rom: &self.rom,
             nor: &mut self.nor,
             injection: &mut self.injection,
+            nor_read_map: self.nor_read_map.as_deref_mut(),
+            nor_read_trace: if self.nor_trace_active {
+                self.nor_read_trace.as_mut()
+            } else {
+                None
+            },
+            nor_trace_full: self.nor_trace_full,
+            pc: cpu.pc,
         };
 
         let cycles = cpu.step(&mut bus);
@@ -412,6 +458,10 @@ struct Nc1020Bus<'a> {
     rom: &'a [u8],
     nor: &'a mut [u8],
     injection: &'a mut InjectionBridge,
+    nor_read_map: Option<&'a mut [u8]>,
+    nor_read_trace: Option<&'a mut Vec<(u16, u32)>>,
+    nor_trace_full: bool,
+    pc: u16,
 }
 
 impl<'a> CpuBus for Nc1020Bus<'a> {
@@ -446,6 +496,22 @@ impl<'a> CpuBus for Nc1020Bus<'a> {
                 }
             }
             MemRegion::Nor => {
+                if let Some(map) = self.nor_read_map.as_mut() {
+                    if let Some(slot) = map.get_mut(offset / 64) {
+                        *slot = 1;
+                    }
+                }
+                if let Some(tr) = self.nor_read_trace.as_mut() {
+                    // By default only record GFFS bookkeeping accesses
+                    // (0x20000..0x30000) to keep the trace small and focused.
+                    // When `WQX_NORTRACE_ALL` is set, record every NOR read so
+                    // we can see where the firmware pulls application data from
+                    // (it is NOT the 0x22000 entry area).
+                    let in_gffs = (0x20000..0x30000).contains(&offset);
+                    if in_gffs || self.nor_trace_full {
+                        tr.push((self.pc, offset as u32));
+                    }
+                }
                 if offset < self.nor.len() {
                     self.nor[offset]
                 } else {

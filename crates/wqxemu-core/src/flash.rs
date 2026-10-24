@@ -79,6 +79,13 @@ pub struct Flash {
     pub erase_ops: u32,
 }
 
+/// Whether per-byte program logging is enabled.  Cached because
+/// [`Flash::write`] runs on every flash byte program, i.e. a hot path.
+fn nor_prog_tracing() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("WQX_NORTRACE").is_some())
+}
+
 impl Flash {
     /// Create a new flash controller
     pub fn new() -> Self {
@@ -172,6 +179,17 @@ impl Flash {
                         // Byte program: AND the value with existing data
                         let offset = bank_offset + (addr as usize - 0x4000);
                         if offset < nor.len() {
+                            // Debug aid: log every byte program under the
+                            // `nor_prog` target, but only when NOR tracing is
+                            // explicitly requested (see `WQX_NORTRACE`).  This
+                            // is a hot path, so the env lookup is cached.
+                            if nor_prog_tracing() {
+                                log::info!(
+                                    target: "nor_prog",
+                                    "byte_program 0x{:05X} <- 0x{:02X} (bank {})",
+                                    offset, value, bank_idx
+                                );
+                            }
                             nor[offset] &= value;
                             self.program_ops = self.program_ops.saturating_add(1);
                         }

@@ -355,6 +355,25 @@ impl Emulator {
         //    don't emulate a whole reboot.
         self.run_cycles(300_000);
 
+        // Debug aid (WQX_RAM_SEARCH=1): look for the injected file's leading
+        // bytes in the CPU-visible memory to see whether the firmware's write
+        // syscalls actually buffered the data anywhere.
+        if std::env::var("WQX_RAM_SEARCH").is_ok() && data.len() >= 8 {
+            let needle = &data[..8];
+            let mut hits = Vec::new();
+            let mut window = Vec::new();
+            for a in (0u16..0xFFFE).step_by(1) {
+                window.push(self.peek(a));
+                if window.len() > needle.len() {
+                    window.remove(0);
+                }
+                if window.len() == needle.len() && window[..] == *needle {
+                    hits.push(a + 1 - needle.len() as u16);
+                }
+            }
+            log::info!("RAM_SEARCH: file leading bytes found at {:04X?}", hits);
+        }
+
         let bytes_sent = self.machine.inject_bytes_sent();
 
         // 9. Validate end-to-end: clean reboot and re-mount the file system,
@@ -447,6 +466,24 @@ impl Emulator {
     /// Debug helper: per-64-byte NOR read map (1 = block read since boot).
     pub fn debug_nor_read_map(&self) -> Vec<u8> {
         self.machine.debug_nor_read_map()
+    }
+
+    /// Debug helper: `(pc, nor_offset)` pairs for GFFS-region NOR reads since
+    /// boot (only populated when `WQX_NORTRACE_PC` is set). Used to reverse
+    /// the firmware's GFFS `start` → physical address mapping.
+    pub fn debug_nor_read_trace(&self) -> Vec<(u16, u32)> {
+        self.machine.debug_nor_read_trace()
+    }
+
+    /// Enable/disable GFFS-region read tracing at runtime, so a caller can
+    /// capture only a specific interaction (e.g. opening the application menu).
+    pub fn debug_nor_read_trace_set_active(&mut self, active: bool) {
+        self.machine.debug_nor_read_trace_set_active(active);
+    }
+
+    /// Discard the captured GFFS-region read trace.
+    pub fn debug_nor_read_trace_clear(&mut self) {
+        self.machine.debug_nor_read_trace_clear();
     }
 
     /// Number of NAND program operations since power-on.
