@@ -2,6 +2,7 @@ tmp/
 target/
 .claude/
 .codegraph/
+.workbuddy/
 Cargo.lock
 *.dll
 *.so
