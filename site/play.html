@@ -411,9 +411,7 @@
         window.EJS_gameUrl = URL.createObjectURL(firmwareFile);
         window.EJS_gameName = firmwareFile.name;
         window.EJS_pathtodata = RUNTIME_PATH;
-        // The loader is injected only after the firmware is chosen, so the
-        // runtime can start right away instead of asking for a second click.
-        window.EJS_startOnLoaded = true;
+        window.EJS_startOnLoaded = false;
         window.EJS_backgroundColor = '#0a0a12';
         if (currentLang === 'zh') window.EJS_language = 'zh-CN';
 
