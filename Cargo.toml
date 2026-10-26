@@ -32,3 +32,10 @@ tempfile = "3"
 opt-level = 3
 lto = true
 strip = true
+
+# EmulatorJS builds the core for wasm32-unknown-emscripten. `panic = "abort"`
+# keeps the module free of exception-handling instructions, which Binaryen's
+# Asyncify pass cannot process.
+[profile.wasm-release]
+inherits = "release"
+panic = "abort"

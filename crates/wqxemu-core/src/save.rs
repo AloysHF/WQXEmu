@@ -5,10 +5,14 @@
 
 use anyhow::{Context, Result};
 use flate2::read::GzDecoder;
+#[cfg(not(target_os = "emscripten"))]
 use flate2::write::GzEncoder;
+#[cfg(not(target_os = "emscripten"))]
 use flate2::Compression;
 use serde::{Deserialize, Serialize};
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{BufReader, Read};
+#[cfg(not(target_os = "emscripten"))]
+use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use crate::cpu::Cpu;
@@ -52,6 +56,10 @@ pub fn read_persistent_state_file(path: &Path) -> Result<Vec<u8>> {
 }
 
 /// Atomically write a compressed persistent session to disk.
+///
+/// Browser builds keep sessions through the frontend's save-state support
+/// instead of the host filesystem, so this is unavailable on Emscripten.
+#[cfg(not(target_os = "emscripten"))]
 pub fn write_persistent_state_file(path: &Path, state: &[u8]) -> Result<()> {
     let parent = path
         .parent()

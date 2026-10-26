@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="在浏览器中选择固件包即可运行文曲星模拟器，无需安装。由 EmulatorJS 与 WQXEmu WebAssembly 核心驱动。">
+  <meta name="theme-color" content="#0f0f1a">
+  <title>在线试玩文曲星模拟器 — WQXEmu</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>星</text></svg>">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;700;900&family=Ma+Shan+Zheng&display=swap" rel="stylesheet">
+  <style>
+    .play-page {
+      min-height: 100vh;
+    }
+
+    .play-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      max-width: var(--container-max);
+      margin: 0 auto;
+      padding: 20px clamp(1.5rem, 4vw, 3rem);
+    }
+
+    .play-brand {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      color: var(--text-primary);
+      text-decoration: none;
+    }
+
+    .play-brand .logo-char { font-size: 1.8rem; }
+
+    .play-header-links {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 18px;
+    }
+
+    .play-header-links a {
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+      text-decoration: none;
+    }
+
+    .play-header-links a:hover { color: var(--text-primary); }
+
+    .play-main {
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 8px clamp(1.5rem, 4vw, 3rem) 64px;
+    }
+
+    .play-title {
+      font-family: var(--font-calligraphy);
+      font-size: clamp(2rem, 5vw, 3.2rem);
+      line-height: 1.25;
+      letter-spacing: 0.06em;
+    }
+
+    .play-title span { color: var(--cinnabar); }
+
+    .play-subtitle {
+      color: var(--text-secondary);
+      margin: 8px 0 20px;
+      max-width: 68ch;
+    }
+
+    .play-subtitle code { color: var(--amber); font-size: 0.95em; }
+
+    .play-stage {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 4 / 3;
+      background: #0a0a12;
+      border: 1px solid rgba(212, 168, 83, 0.28);
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+    }
+
+    .play-stage > #game { position: absolute; inset: 0; }
+    #game, #game canvas { width: 100% !important; height: 100% !important; }
+
+    .play-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 5;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      padding: 24px;
+      text-align: center;
+      background: rgba(15, 15, 26, 0.92);
+      backdrop-filter: blur(3px);
+    }
+
+    .play-overlay h2 { font-size: 1.3rem; }
+    .play-overlay p { color: var(--text-secondary); max-width: 58ch; }
+    .play-overlay .btn { margin-top: 4px; }
+    .play-overlay[hidden] { display: none; }
+    .play-overlay code { font-size: 0.9em; color: var(--amber); }
+
+    .play-file {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .play-file label.btn { cursor: pointer; }
+    .play-file input[hidden] { display: none; }
+
+    .play-file-name {
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      max-width: 260px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .play-file-name:empty { display: none; }
+
+    .play-picker-error { color: #e07a7e; font-size: 0.85rem; }
+
+    .play-picker-layout {
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 14px;
+      text-align: left;
+      line-height: 1.7;
+    }
+
+    .play-picker-hint { font-size: 0.78rem; color: var(--text-muted); }
+    .play-picker-hint a { color: var(--text-secondary); text-decoration: underline; }
+
+    .play-start { margin-top: 6px; }
+    .play-start:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+
+    .play-stage.is-drop {
+      border-color: rgba(212, 168, 83, 0.7);
+      box-shadow: 0 0 0 3px rgba(212, 168, 83, 0.18), 0 20px 60px rgba(0, 0, 0, 0.45);
+    }
+
+    .play-controls {
+      margin-top: 16px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 20px;
+      align-items: center;
+      color: var(--text-secondary);
+      font-size: 0.85rem;
+    }
+
+    .play-controls kbd {
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      color: var(--text-primary);
+      background: var(--glass);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-bottom-width: 2px;
+      border-radius: 5px;
+      padding: 1px 6px;
+    }
+
+    .play-reset {
+      margin-left: auto;
+      padding: 4px 14px;
+      font: inherit;
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 999px;
+      cursor: pointer;
+    }
+
+    .play-reset:hover { color: var(--amber); border-color: rgba(212, 168, 83, 0.45); }
+    .play-reset[hidden] { display: none; }
+
+    .play-note { margin-top: 12px; font-size: 0.8rem; color: var(--text-muted); }
+    .play-note a { color: var(--text-secondary); text-decoration: underline; }
+
+    @media (max-width: 640px) {
+      .play-header { padding: 16px; }
+      .play-header-links { gap: 12px; }
+      .play-header-links .optional { display: none; }
+      .play-main { padding: 0 16px 40px; }
+      .play-stage { border-radius: 8px; }
+      .play-stage.is-picking { aspect-ratio: auto; }
+      .play-stage.is-picking #play-picker { position: static; }
+      .play-overlay {
+        justify-content: center;
+        justify-content: safe center;
+        padding: 16px;
+        gap: 10px;
+        overflow-y: auto;
+        scrollbar-width: none;
+      }
+      .play-overlay::-webkit-scrollbar { display: none; }
+      .play-overlay h2 { font-size: 1.1rem; }
+      .play-overlay p { font-size: 0.85rem; }
+      .play-picker-hint { font-size: 0.72rem; }
+    }
+  </style>
+</head>
+<body class="play-page">
+
+  <header class="play-header">
+    <a href="index.html" class="play-brand">
+      <span class="logo-char">星</span>
+      <span class="logo-text">WQXEmu</span>
+    </a>
+    <nav class="play-header-links">
+      <a href="index.html" data-i18n="nav-back">返回首页</a>
+      <button id="lang-toggle" class="lang-toggle" aria-label="Switch language">EN</button>
+      <a href="https://github.com/AloysHF/WQXEmu" class="optional" target="_blank" rel="noopener">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="play-main">
+    <h1 class="play-title" data-i18n="title">在线试玩 <span>文曲星</span> 模拟器</h1>
+    <p class="play-subtitle" data-i18n="subtitle">选择一个固件 ZIP（内含同一机型的全部 dump），由 <strong>EmulatorJS</strong> 与 WQXEmu WebAssembly 核心在浏览器中直接运行，无需安装。</p>
+
+    <div class="play-stage is-picking">
+      <div id="game"></div>
+
+      <div id="play-status" class="play-overlay" hidden>
+        <h2 data-i18n="status-title">正在加载核心…</h2>
+        <p data-i18n="status-desc">首次启动需要下载 WebAssembly 核心，请稍候。</p>
+      </div>
+
+      <div id="play-picker" class="play-overlay">
+        <h2 data-i18n="picker-title">选择固件包</h2>
+        <p data-i18n="picker-desc">固件包需为 ZIP，内含同一机型的全部 dump。推荐以机型名建一个顶层文件夹，例如：</p>
+        <pre class="play-picker-layout">nc1020/
+  obj_lu.bin    ROM (.rom / .bin)
+  nc1020.fls    NOR (.fls / .nor)</pre>
+        <div class="play-file">
+          <label class="btn btn-primary">
+            <span data-i18n="pick-firmware">选择固件 ZIP</span>
+            <input id="firmware-file" type="file" accept=".zip,application/zip" hidden>
+          </label>
+          <span id="firmware-name" class="play-file-name"></span>
+        </div>
+        <p id="play-picker-error" class="play-picker-error" hidden></p>
+        <button id="play-start" class="btn btn-primary play-start" type="button" data-i18n="start" disabled>开始运行</button>
+        <p class="play-picker-hint" data-i18n="picker-hint">也可以把 ZIP 拖进窗口。文件只在浏览器本地处理，不会被上传；固件版权归原厂所有，请使用自己合法持有的 dump。机型识别规则见 <a href="https://github.com/AloysHF/WQXEmu/blob/master/docs/EmulatorJS-Core.md" target="_blank" rel="noopener">文档</a>。</p>
+      </div>
+
+      <div id="play-error" class="play-overlay" hidden>
+        <h2 data-i18n="error-title">无法启动在线模拟器</h2>
+        <p data-i18n="error-text">EmulatorJS 运行时未部署（缺少 <code>data/loader.js</code>）。请通过 Pages 部署流程生成 <code>site/data</code>，或直接使用独立版模拟器。</p>
+      </div>
+    </div>
+
+    <div class="play-controls">
+      <span data-i18n="ctrl-move"><kbd>方向键</kbd> / 手柄移动</span>
+      <span data-i18n="ctrl-confirm"><kbd>Enter</kbd> 确认 · <kbd>Esc</kbd> 返回</span>
+      <span data-i18n="ctrl-hotkeys"><kbd>F1</kbd>/<kbd>F4</kbd> 热键 · <kbd>PgUp</kbd>/<kbd>PgDn</kbd> 翻页</span>
+      <span data-i18n="ctrl-keyboard">实体键盘可直接输入字母与数字</span>
+      <button id="play-reset" class="play-reset" type="button" data-i18n="reset" hidden>换一个固件</button>
+    </div>
+
+    <p class="play-note" data-i18n="note">在线试玩使用 <a href="https://emulatorjs.org" target="_blank" rel="noopener">EmulatorJS</a>。固件不随本站分发，请使用自己合法持有的文件。想离线游玩？从 <a href="https://github.com/AloysHF/WQXEmu/releases" target="_blank" rel="noopener">Releases</a> 下载独立模拟器或 RetroArch 核心。</p>
+  </main>
+
+  <script>
+    (function () {
+      'use strict';
+
+      var translations = {
+        zh: {
+          'meta-title': '在线试玩文曲星模拟器 — WQXEmu',
+          'meta-desc': '在浏览器中选择固件包即可运行文曲星模拟器，无需安装。由 EmulatorJS 与 WQXEmu WebAssembly 核心驱动。',
+          'nav-back': '返回首页',
+          'title': '在线试玩 <span>文曲星</span> 模拟器',
+          'subtitle': '选择一个固件 ZIP（内含同一机型的全部 dump），由 <strong>EmulatorJS</strong> 与 WQXEmu WebAssembly 核心在浏览器中直接运行，无需安装。',
+          'status-title': '正在加载核心…',
+          'status-desc': '首次启动需要下载 WebAssembly 核心，请稍候。',
+          'picker-title': '选择固件包',
+          'picker-desc': '固件包需为 ZIP，内含同一机型的全部 dump。推荐以机型名建一个顶层文件夹，例如：',
+          'pick-firmware': '选择固件 ZIP',
+          'start': '开始运行',
+          'picker-hint': '也可以把 ZIP 拖进窗口。文件只在浏览器本地处理，不会被上传；固件版权归原厂所有，请使用自己合法持有的 dump。机型识别规则见 <a href="https://github.com/AloysHF/WQXEmu/blob/master/docs/EmulatorJS-Core.md" target="_blank" rel="noopener">文档</a>。',
+          'error-title': '无法启动在线模拟器',
+          'error-text': 'EmulatorJS 运行时未部署（缺少 <code>data/loader.js</code>）。请通过 Pages 部署流程生成 <code>site/data</code>，或直接使用独立版模拟器。',
+          'ctrl-move': '<kbd>方向键</kbd> / 手柄移动',
+          'ctrl-confirm': '<kbd>Enter</kbd> 确认 · <kbd>Esc</kbd> 返回',
+          'ctrl-hotkeys': '<kbd>F1</kbd>/<kbd>F4</kbd> 热键 · <kbd>PgUp</kbd>/<kbd>PgDn</kbd> 翻页',
+          'ctrl-keyboard': '实体键盘可直接输入字母与数字',
+          'reset': '换一个固件',
+          'note': '在线试玩使用 <a href="https://emulatorjs.org" target="_blank" rel="noopener">EmulatorJS</a>。固件不随本站分发，请使用自己合法持有的文件。想离线游玩？从 <a href="https://github.com/AloysHF/WQXEmu/releases" target="_blank" rel="noopener">Releases</a> 下载独立模拟器或 RetroArch 核心。',
+          'invalid-firmware': '请选择 .zip 固件包。'
+        },
+        en: {
+          'meta-title': 'Play Wenquxing Online — WQXEmu',
+          'meta-desc': 'Load a firmware archive in your browser and run the Wenquxing emulator, no install required. Powered by EmulatorJS and the WQXEmu WebAssembly core.',
+          'nav-back': 'Back to Home',
+          'title': 'Play the <span>Wenquxing</span> Emulator Online',
+          'subtitle': 'Pick a firmware ZIP (all dumps for one model). <strong>EmulatorJS</strong> and the WQXEmu WebAssembly core run it right in the browser.',
+          'status-title': 'Loading core…',
+          'status-desc': 'The first launch downloads the WebAssembly core.',
+          'picker-title': 'Choose a firmware archive',
+          'picker-desc': 'The archive must be a ZIP holding every dump of a single model. Put them in a top-level folder named after the model, for example:',
+          'pick-firmware': 'Choose Firmware ZIP',
+          'start': 'Start',
+          'picker-hint': 'You can also drop the ZIP onto the window. Files are processed locally in your browser and never uploaded. Firmware is copyrighted; use dumps you legally own. See the <a href="https://github.com/AloysHF/WQXEmu/blob/master/docs/EmulatorJS-Core.md" target="_blank" rel="noopener">documentation</a> for model detection.',
+          'error-title': 'Unable to start the online emulator',
+          'error-text': 'The EmulatorJS runtime is not deployed (missing <code>data/loader.js</code>). Generate <code>site/data</code> through the Pages workflow, or use the standalone emulator.',
+          'ctrl-move': '<kbd>Arrows</kbd> / gamepad Move',
+          'ctrl-confirm': '<kbd>Enter</kbd> Confirm · <kbd>Esc</kbd> Back',
+          'ctrl-hotkeys': '<kbd>F1</kbd>/<kbd>F4</kbd> Hotkeys · <kbd>PgUp</kbd>/<kbd>PgDn</kbd> Page',
+          'ctrl-keyboard': 'Type letters and digits with a physical keyboard',
+          'reset': 'Load another firmware',
+          'note': 'Online play uses <a href="https://emulatorjs.org" target="_blank" rel="noopener">EmulatorJS</a>. Firmware is not distributed with this site, so use your own legally obtained files. Prefer playing offline? Download the standalone emulator or the RetroArch core from <a href="https://github.com/AloysHF/WQXEmu/releases" target="_blank" rel="noopener">Releases</a>.',
+          'invalid-firmware': 'Please choose a .zip firmware archive.'
+        }
+      };
+
+      var storageKey = 'wqxemu-lang';
+      var currentLang;
+      try {
+        currentLang = localStorage.getItem(storageKey) || 'zh';
+      } catch (error) {
+        currentLang = 'zh';
+      }
+
+      var languageButton = document.getElementById('lang-toggle');
+      var description = document.querySelector('meta[name="description"]');
+
+      function applyLang(lang) {
+        currentLang = lang;
+        document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
+        var t = translations[lang];
+
+        document.querySelectorAll('[data-i18n]').forEach(function (el) {
+          var key = el.getAttribute('data-i18n');
+          if (t[key] !== undefined) el.innerHTML = t[key];
+        });
+
+        document.title = t['meta-title'];
+        if (description) description.setAttribute('content', t['meta-desc']);
+        languageButton.textContent = lang === 'zh' ? 'EN' : '中';
+        languageButton.setAttribute('aria-label', lang === 'zh' ? 'Switch to English' : '切换到中文');
+
+        try {
+          localStorage.setItem(storageKey, lang);
+        } catch (error) {
+          // Language persistence is optional in restricted browsing contexts.
+        }
+      }
+
+      var RUNTIME_PATH = 'data/';
+      var FIRMWARE_EXTENSIONS = /\.zip$/i;
+      var stage = document.querySelector('.play-stage');
+      var status = document.getElementById('play-status');
+      var picker = document.getElementById('play-picker');
+      var pickerError = document.getElementById('play-picker-error');
+      var error = document.getElementById('play-error');
+      var firmwareInput = document.getElementById('firmware-file');
+      var firmwareName = document.getElementById('firmware-name');
+      var startButton = document.getElementById('play-start');
+      var resetButton = document.getElementById('play-reset');
+      var firmwareFile = null;
+      var booted = false;
+
+      function show(element) { element.hidden = false; }
+      function hide(element) { element.hidden = true; }
+
+      function fail(messageKey) {
+        pickerError.textContent = translations[currentLang][messageKey];
+        show(pickerError);
+      }
+
+      function updateStartState() {
+        startButton.disabled = !firmwareFile || booted;
+      }
+
+      function start() {
+        if (!firmwareFile || booted) return;
+        booted = true;
+        updateStartState();
+        stage.classList.remove('is-picking');
+        hide(picker);
+        hide(error);
+        hide(pickerError);
+        show(status);
+
+        window.EJS_player = '#game';
+        window.EJS_core = 'wqxemu';
+        // Blob URLs have no file name, so EJS_gameName must keep the extension.
+        window.EJS_gameUrl = URL.createObjectURL(firmwareFile);
+        window.EJS_gameName = firmwareFile.name;
+        window.EJS_pathtodata = RUNTIME_PATH;
+        window.EJS_startOnLoaded = false;
+        window.EJS_backgroundColor = '#0a0a12';
+        // Only zh-CN is deployed next to the runtime; other languages use the
+        // built-in English UI.
+        if (currentLang === 'zh') window.EJS_language = 'zh-CN';
+
+        var runtime = document.createElement('script');
+        runtime.src = RUNTIME_PATH + 'loader.js';
+        runtime.onload = function () {
+          hide(status);
+          show(resetButton);
+        };
+        runtime.onerror = function () {
+          booted = false;
+          updateStartState();
+          hide(status);
+          hide(picker);
+          show(error);
+          show(resetButton);
+        };
+        document.body.appendChild(runtime);
+      }
+
+      function selectFirmware(file) {
+        if (!file) return;
+        if (!FIRMWARE_EXTENSIONS.test(file.name)) {
+          firmwareFile = null;
+          firmwareName.textContent = '';
+          fail('invalid-firmware');
+        } else {
+          firmwareFile = file;
+          firmwareName.textContent = file.name;
+          hide(pickerError);
+        }
+        updateStartState();
+      }
+
+      firmwareInput.addEventListener('change', function () {
+        selectFirmware(firmwareInput.files && firmwareInput.files[0]);
+      });
+
+      startButton.addEventListener('click', start);
+
+      var dragDepth = 0;
+
+      document.addEventListener('dragenter', function (event) {
+        event.preventDefault();
+        if (booted) return;
+        dragDepth += 1;
+        stage.classList.add('is-drop');
+      });
+
+      document.addEventListener('dragover', function (event) {
+        event.preventDefault();
+      });
+
+      document.addEventListener('dragleave', function (event) {
+        event.preventDefault();
+        if (booted) return;
+        dragDepth = Math.max(0, dragDepth - 1);
+        if (dragDepth === 0) stage.classList.remove('is-drop');
+      });
+
+      document.addEventListener('drop', function (event) {
+        event.preventDefault();
+        dragDepth = 0;
+        stage.classList.remove('is-drop');
+        if (booted) return;
+        var files = event.dataTransfer && event.dataTransfer.files;
+        if (files && files.length > 0) selectFirmware(files[0]);
+      });
+
+      resetButton.addEventListener('click', function () {
+        window.location.reload();
+      });
+
+      languageButton.addEventListener('click', function () {
+        applyLang(currentLang === 'zh' ? 'en' : 'zh');
+      });
+
+      applyLang(currentLang);
+      updateStartState();
+    })();
+  </script>
+</body>
+</html>
