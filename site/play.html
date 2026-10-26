@@ -411,10 +411,10 @@
         window.EJS_gameUrl = URL.createObjectURL(firmwareFile);
         window.EJS_gameName = firmwareFile.name;
         window.EJS_pathtodata = RUNTIME_PATH;
-        window.EJS_startOnLoaded = false;
+        // The loader is injected only after the firmware is chosen, so the
+        // runtime can start right away instead of asking for a second click.
+        window.EJS_startOnLoaded = true;
         window.EJS_backgroundColor = '#0a0a12';
-        // Only zh-CN is deployed next to the runtime; other languages use the
-        // built-in English UI.
         if (currentLang === 'zh') window.EJS_language = 'zh-CN';
 
         var runtime = document.createElement('script');
