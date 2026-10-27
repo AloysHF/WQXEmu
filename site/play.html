@@ -110,25 +110,8 @@
     .play-overlay[hidden] { display: none; }
     .play-overlay code { font-size: 0.9em; color: var(--amber); }
 
-    .play-file {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .play-file label.btn { cursor: pointer; }
-    .play-file input[hidden] { display: none; }
-
-    .play-file-name {
-      font-size: 0.78rem;
-      color: var(--text-secondary);
-      max-width: 260px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .play-file-name:empty { display: none; }
+    #play-picker label.btn { cursor: pointer; }
+    #play-picker input[hidden] { display: none; }
 
     .play-picker-error { color: #e07a7e; font-size: 0.85rem; }
 
@@ -146,14 +129,6 @@
 
     .play-picker-hint { font-size: 0.78rem; color: var(--text-muted); }
     .play-picker-hint a { color: var(--text-secondary); text-decoration: underline; }
-
-    .play-start { margin-top: 6px; }
-    .play-start:disabled {
-      opacity: 0.45;
-      cursor: not-allowed;
-      transform: none;
-      box-shadow: none;
-    }
 
     .play-stage.is-drop {
       border-color: rgba(212, 168, 83, 0.7);
@@ -254,15 +229,11 @@
         <pre class="play-picker-layout">nc1020/
   obj_lu.bin    ROM (.rom / .bin)
   nc1020.fls    NOR (.fls / .nor)</pre>
-        <div class="play-file">
-          <label class="btn btn-primary">
-            <span data-i18n="pick-firmware">选择固件 ZIP</span>
-            <input id="firmware-file" type="file" accept=".zip,application/zip" hidden>
-          </label>
-          <span id="firmware-name" class="play-file-name"></span>
-        </div>
+        <label class="btn btn-primary">
+          <span data-i18n="pick-firmware">选择固件 ZIP</span>
+          <input id="firmware-file" type="file" accept=".zip,application/zip" hidden>
+        </label>
         <p id="play-picker-error" class="play-picker-error" hidden></p>
-        <button id="play-start" class="btn btn-primary play-start" type="button" data-i18n="start" disabled>开始运行</button>
         <p class="play-picker-hint" data-i18n="picker-hint">也可以把 ZIP 拖进窗口。文件只在浏览器本地处理，不会被上传；固件版权归原厂所有，请使用自己合法持有的 dump。机型识别规则见 <a href="https://github.com/AloysHF/WQXEmu/blob/master/docs/EmulatorJS-Core.md" target="_blank" rel="noopener">文档</a>。</p>
       </div>
 
@@ -299,7 +270,6 @@
           'picker-title': '选择固件包',
           'picker-desc': '固件包需为 ZIP，内含同一机型的全部 dump。推荐以机型名建一个顶层文件夹，例如：',
           'pick-firmware': '选择固件 ZIP',
-          'start': '开始运行',
           'picker-hint': '也可以把 ZIP 拖进窗口。文件只在浏览器本地处理，不会被上传；固件版权归原厂所有，请使用自己合法持有的 dump。机型识别规则见 <a href="https://github.com/AloysHF/WQXEmu/blob/master/docs/EmulatorJS-Core.md" target="_blank" rel="noopener">文档</a>。',
           'error-title': '无法启动在线模拟器',
           'error-text': 'EmulatorJS 运行时未部署（缺少 <code>data/loader.js</code>）。请通过 Pages 部署流程生成 <code>site/data</code>，或直接使用独立版模拟器。',
@@ -322,7 +292,6 @@
           'picker-title': 'Choose a firmware archive',
           'picker-desc': 'The archive must be a ZIP holding every dump of a single model. Put them in a top-level folder named after the model, for example:',
           'pick-firmware': 'Choose Firmware ZIP',
-          'start': 'Start',
           'picker-hint': 'You can also drop the ZIP onto the window. Files are processed locally in your browser and never uploaded. Firmware is copyrighted; use dumps you legally own. See the <a href="https://github.com/AloysHF/WQXEmu/blob/master/docs/EmulatorJS-Core.md" target="_blank" rel="noopener">documentation</a> for model detection.',
           'error-title': 'Unable to start the online emulator',
           'error-text': 'The EmulatorJS runtime is not deployed (missing <code>data/loader.js</code>). Generate <code>site/data</code> through the Pages workflow, or use the standalone emulator.',
@@ -377,10 +346,7 @@
       var pickerError = document.getElementById('play-picker-error');
       var error = document.getElementById('play-error');
       var firmwareInput = document.getElementById('firmware-file');
-      var firmwareName = document.getElementById('firmware-name');
-      var startButton = document.getElementById('play-start');
       var resetButton = document.getElementById('play-reset');
-      var firmwareFile = null;
       var booted = false;
 
       function show(element) { element.hidden = false; }
@@ -391,14 +357,9 @@
         show(pickerError);
       }
 
-      function updateStartState() {
-        startButton.disabled = !firmwareFile || booted;
-      }
-
-      function start() {
-        if (!firmwareFile || booted) return;
+      function boot(firmware) {
+        if (booted) return;
         booted = true;
-        updateStartState();
         stage.classList.remove('is-picking');
         hide(picker);
         hide(error);
@@ -408,8 +369,8 @@
         window.EJS_player = '#game';
         window.EJS_core = 'wqxemu';
         // Blob URLs have no file name, so EJS_gameName must keep the extension.
-        window.EJS_gameUrl = URL.createObjectURL(firmwareFile);
-        window.EJS_gameName = firmwareFile.name;
+        window.EJS_gameUrl = URL.createObjectURL(firmware);
+        window.EJS_gameName = firmware.name;
         window.EJS_pathtodata = RUNTIME_PATH;
         window.EJS_startOnLoaded = false;
         window.EJS_backgroundColor = '#0a0a12';
@@ -423,34 +384,25 @@
         };
         runtime.onerror = function () {
           booted = false;
-          updateStartState();
           hide(status);
-          hide(picker);
           show(error);
           show(resetButton);
         };
         document.body.appendChild(runtime);
       }
 
-      function selectFirmware(file) {
-        if (!file) return;
-        if (!FIRMWARE_EXTENSIONS.test(file.name)) {
-          firmwareFile = null;
-          firmwareName.textContent = '';
+      function pick(firmware) {
+        if (!firmware || booted) return;
+        if (!FIRMWARE_EXTENSIONS.test(firmware.name)) {
           fail('invalid-firmware');
-        } else {
-          firmwareFile = file;
-          firmwareName.textContent = file.name;
-          hide(pickerError);
+          return;
         }
-        updateStartState();
+        boot(firmware);
       }
 
       firmwareInput.addEventListener('change', function () {
-        selectFirmware(firmwareInput.files && firmwareInput.files[0]);
+        pick(firmwareInput.files && firmwareInput.files[0]);
       });
-
-      startButton.addEventListener('click', start);
 
       var dragDepth = 0;
 
@@ -476,9 +428,8 @@
         event.preventDefault();
         dragDepth = 0;
         stage.classList.remove('is-drop');
-        if (booted) return;
         var files = event.dataTransfer && event.dataTransfer.files;
-        if (files && files.length > 0) selectFirmware(files[0]);
+        if (files && files.length > 0) pick(files[0]);
       });
 
       resetButton.addEventListener('click', function () {
@@ -490,7 +441,6 @@
       });
 
       applyLang(currentLang);
-      updateStartState();
     })();
   </script>
 </body>
