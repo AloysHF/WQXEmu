@@ -876,6 +876,90 @@ tr:hover td {
     background: rgba(212, 168, 83, 0.05);
 }
 
+/* ===== Play Section ===== */
+.play {
+    background: linear-gradient(180deg, var(--ink-deep) 0%, var(--ink-dark) 100%);
+}
+
+.play-cta {
+    display: grid;
+    grid-template-columns: 1.15fr 0.85fr;
+    gap: 3rem;
+    align-items: center;
+    padding: clamp(1.5rem, 4vw, 3rem);
+    background: var(--glass);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    backdrop-filter: blur(10px);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+}
+
+.play-cta-badge {
+    display: inline-block;
+    padding: 0.25rem 0.8rem;
+    border-radius: 999px;
+    background: rgba(212, 168, 83, 0.12);
+    border: 1px solid rgba(212, 168, 83, 0.3);
+    color: var(--amber);
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+}
+
+.play-cta-body h2 {
+    font-family: var(--font-calligraphy);
+    font-size: clamp(2rem, 4vw, 3rem);
+    color: var(--text-primary);
+    letter-spacing: 0.08em;
+    margin: 0.9rem 0 0.75rem;
+}
+
+.play-cta-body p {
+    color: var(--text-secondary);
+    font-size: 1rem;
+    margin-bottom: 1.5rem;
+    max-width: 52ch;
+}
+
+.play-cta-visual {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.play-cta-screen {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6rem;
+    width: 100%;
+    max-width: 380px;
+    aspect-ratio: 2 / 1;
+    background:
+        repeating-linear-gradient(0deg, rgba(90, 138, 106, 0.08) 0 1px, transparent 1px 3px),
+        #0b0f0d;
+    border: 1px solid rgba(90, 138, 106, 0.35);
+    border-radius: 12px;
+    box-shadow: inset 0 0 40px rgba(90, 138, 106, 0.12), 0 12px 32px rgba(0, 0, 0, 0.4);
+}
+
+.play-cta-char {
+    font-family: var(--font-calligraphy);
+    font-size: clamp(3rem, 6vw, 4.5rem);
+    line-height: 1;
+    color: var(--jade);
+    text-shadow: 0 0 18px rgba(90, 138, 106, 0.45);
+}
+
+.play-cta-hint {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.35em;
+    color: var(--text-muted);
+}
+
 /* ===== Build Section ===== */
 .build {
     background: var(--ink-dark);
@@ -1034,6 +1118,10 @@ tr:hover td {
         display: none;
     }
 
+    .nav-links {
+        gap: 1.25rem;
+    }
+
     .about-grid {
         grid-template-columns: 1fr;
         gap: 3rem;
@@ -1045,6 +1133,15 @@ tr:hover td {
 
     .build-grid {
         grid-template-columns: 1fr;
+    }
+
+    .play-cta {
+        grid-template-columns: 1fr;
+        gap: 2rem;
+    }
+
+    .play-cta-visual {
+        order: -1;
     }
 }
 

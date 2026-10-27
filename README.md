@@ -30,7 +30,8 @@ A Wenquxing (文曲星) electronic dictionary emulator written in Rust, using Lo
 - **Timer system** — multiple timer sources with interrupt generation
 - **Persistent sessions** — optional compressed state files resume any supported model without modifying source dumps
 - **RetroArch integration** — libretro core for use with RetroArch frontend
-- **Cross-platform** — Windows, macOS, Linux, Android, iOS, and webOS
+- **Browser play** — EmulatorJS/WebAssembly core that runs from a firmware ZIP without installing anything
+- **Cross-platform** — Windows, macOS, Linux, Android, iOS, webOS, and the browser
 
 ## Usage
 
@@ -69,6 +70,27 @@ files through **Load Content**.
 
 See the [RetroArch Core](docs/RetroArch-Core.md) guide for installation, supported platforms, RetroPad mapping, and features.
 
+### Browser Mode (EmulatorJS)
+
+Open <https://AloysHF.github.io/WQXEmu/play.html> and select a firmware ZIP.
+The page runs the WebAssembly core locally; nothing is uploaded and no firmware
+is hosted on the site.
+
+The ZIP carries the dumps for one model, optionally inside a folder named after
+it (`nc1020`, `pc1000`, `cc800`, `nc2000`, `nc3000`):
+
+```
+nc1020.zip
+  nc1020/
+    obj_lu.bin    # system ROM (.rom / .bin)
+    nc1020.fls    # NOR Flash (.fls / .nor)
+```
+
+The required dump set matches standalone mode. Without a recognized folder
+name the core auto-detects the model from the dumps. Self-hosting instructions
+and the full archive rules are in the
+[EmulatorJS Core](docs/EmulatorJS-Core.md) guide.
+
 ## Building
 
 Requires [Rust](https://www.rust-lang.org/tools/install) (stable).
@@ -92,6 +114,21 @@ The compiled core (`wqxemu.dll` / `libwqxemu.so` / `libwqxemu.dylib`) can be loa
 
 For Android cross-compilation, see [Android Libretro Core](docs/Android-Libretro-Core.md).
 For iOS, see [iOS Libretro Core](docs/iOS-Libretro-Core.md).
+
+### EmulatorJS Core (for the browser)
+
+```bash
+cargo +nightly build -p wqxemu-libretro \
+  --target wasm32-unknown-emscripten --profile wasm-release \
+  -Zbuild-std=std,panic_abort
+scripts/build-emulatorjs-core.sh
+```
+
+The script needs an activated emsdk (`emmake`), `p7zip`, and `zip`; it writes
+`out/wqxemu-emulatorjs.zip`, which contains the `wqxemu-wasm.data` and
+`wqxemu-legacy-wasm.data` bundles. See the
+[EmulatorJS Core](docs/EmulatorJS-Core.md) guide for the runtime layout and
+site setup.
 
 ## Testing
 
@@ -134,7 +171,8 @@ crates/
 ├── wqxemu/                    # Standalone binary (→ wqx-emu)
 │   └── src/
 │       └── main.rs            # Window loop and CLI frontend
-└── wqxemu-libretro/           # libretro cdylib (→ wqxemu.{dll,so,dylib})
+└── wqxemu-libretro/           # libretro cdylib/staticlib (→ wqxemu.{dll,so,dylib},
+                               #   or the EmulatorJS wasm staticlib)
     └── src/
         └── lib.rs             # libretro API implementation
 ```

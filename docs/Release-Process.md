@@ -63,9 +63,11 @@ Pushing the tag triggers `.github/workflows/release.yml`, which:
    `wqxemu_libretro.<ext>` and bundling `wqxemu_libretro.info`
 3. **Builds the Android libretro core** for `arm64-v8a`, `armeabi-v7a`, `x86`,
    `x86_64`, packaged as `wqxemu-android-libretro.tar.gz`
-4. **Creates a draft GitHub Release** with:
+4. **Builds the EmulatorJS browser core** for WebGL2 and legacy WebGL1 targets,
+   packaged as `wqxemu-emulatorjs.zip`
+5. **Creates a draft GitHub Release** with:
    - Auto-generated release notes (PRs and commits since the previous tag)
-   - A download table for standalone, libretro, and Android artifacts
+   - A download table for standalone, libretro, Android, and EmulatorJS artifacts
    - All build artifacts attached
 
 ### 5. Review and publish the release
@@ -80,6 +82,7 @@ Pushing the tag triggers `.github/workflows/release.yml`, which:
    - `wqxemu-windows-x86_64.zip`
    - `*-libretro.*` (one per platform)
    - `wqxemu-android-libretro.tar.gz`
+   - `wqxemu-emulatorjs.zip`
 5. Click **Publish release**
 
 ### 6. Sync `.info` file to upstream libretro-super

@@ -13,6 +13,7 @@
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 #![allow(clippy::manual_range_contains)]
 
+use anyhow::Context as _;
 use std::ffi::{c_void, CStr, CString};
 use std::os::raw::c_char;
 use std::panic;
@@ -21,8 +22,12 @@ use std::ptr;
 
 #[cfg(test)]
 use wqxemu_core::key_id_for_host_key;
+#[cfg(not(target_os = "emscripten"))]
 use wqxemu_core::save::{read_persistent_state_file, write_persistent_state_file};
-use wqxemu_core::{Emulator, FrontendInputState, HostKey, MachineModel, LCD_HEIGHT, LCD_WIDTH};
+use wqxemu_core::{
+    detect_model, Emulator, FrontendInputState, HostKey, MachineModel, RomFiles, LCD_HEIGHT,
+    LCD_WIDTH,
+};
 
 // ============================================================
 // libretro constants
@@ -220,6 +225,56 @@ fn firmware_files_for_model(
     wqxemu_core::RomFiles::from_dir(&system_dir.join("WQXEmu").join(model.name()))
 }
 
+/// Resolve firmware dumps from an extracted content archive.
+///
+/// EmulatorJS hands the core the path of the first archive entry whose
+/// extension is listed in `core.json`. The remaining firmware files are
+/// extracted beside it, so the parent directory holds every dump of one
+/// model. A top-level folder (or a file name) may name the model; otherwise
+/// the dumps are auto-detected.
+#[cfg(target_os = "emscripten")]
+fn firmware_files_from_content(content: &Path) -> anyhow::Result<(MachineModel, RomFiles)> {
+    let dir = content
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("/"));
+    let files = RomFiles::from_dir(dir)?;
+    let named_model = dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .or_else(|| content.file_stem().and_then(|name| name.to_str()))
+        .and_then(MachineModel::from_name);
+    let model = named_model.unwrap_or_else(|| detect_model(&files));
+    files
+        .validate_for_model(model)
+        .with_context(|| format!("Invalid {} firmware archive", model.name()))?;
+    Ok((model, files))
+}
+
+/// Select the firmware and model for a new session.
+unsafe fn resolve_firmware(info: *const RetroGameInfo) -> anyhow::Result<(MachineModel, RomFiles)> {
+    #[cfg(target_os = "emscripten")]
+    if !info.is_null() {
+        let path = (*info).path;
+        anyhow::ensure!(!path.is_null(), "WQXEmu received no firmware path");
+        let path = CStr::from_ptr(path)
+            .to_str()
+            .context("Firmware path is not valid UTF-8")?;
+        return firmware_files_from_content(Path::new(path));
+    }
+
+    #[cfg(not(target_os = "emscripten"))]
+    anyhow::ensure!(info.is_null(), "WQXEmu does not load firmware as content");
+
+    let system_dir = SYSTEM_DIR
+        .as_deref()
+        .context("RetroArch system directory is not configured")?;
+    let model = selected_model();
+    let files = firmware_files_for_model(Path::new(system_dir), model)?;
+    files.validate_for_model(model)?;
+    Ok((model, files))
+}
+
 fn model_from_option(value: &str) -> Option<MachineModel> {
     MachineModel::from_name(value)
 }
@@ -277,6 +332,7 @@ unsafe fn request_pixel_format() -> bool {
     }
 }
 
+#[cfg(not(target_os = "emscripten"))]
 fn persistent_state_path(
     save_dir: &Path,
     model: MachineModel,
@@ -287,6 +343,7 @@ fn persistent_state_path(
         .join(format!("{firmware_fingerprint:016x}.wqxs"))
 }
 
+#[cfg(not(target_os = "emscripten"))]
 unsafe fn persist_active_emulator() {
     let (Some(emulator), Some(path)) = (EMULATOR.as_ref(), PERSISTENT_STATE_PATH.as_deref()) else {
         return;
@@ -301,6 +358,12 @@ unsafe fn persist_active_emulator() {
             path.display()
         )),
     }
+}
+
+#[cfg(target_os = "emscripten")]
+unsafe fn persist_active_emulator() {
+    // Browser sessions rely on the frontend's save states; there is no host
+    // filesystem to keep a cross-process session in.
 }
 
 fn machine_model_tag(model: MachineModel) -> u8 {
@@ -548,12 +611,16 @@ pub extern "C" fn retro_deinit() {
 /// Get system information
 #[no_mangle]
 pub extern "C" fn retro_get_system_info(info: *mut RetroSystemInfo) {
+    #[cfg(target_os = "emscripten")]
+    const VALID_EXTENSIONS: &CStr = c"zip|rom|bin|fls|nor|nand|nand0";
+    #[cfg(not(target_os = "emscripten"))]
+    const VALID_EXTENSIONS: &CStr = c"";
     unsafe {
         (*info) = RetroSystemInfo {
             library_name: c"WQXEmu".as_ptr(),
             library_version: c"0.1.0".as_ptr(),
-            valid_extensions: c"".as_ptr(),
-            need_fullpath: false,
+            valid_extensions: VALID_EXTENSIONS.as_ptr(),
+            need_fullpath: cfg!(target_os = "emscripten"),
             block_extract: false,
         };
     }
@@ -589,37 +656,21 @@ pub extern "C" fn retro_set_controller_port_device(_port: u32, _device: u32) {
     // WQXEmu uses the standard RetroPad on port 0.
 }
 
-/// Start the selected machine without content.
+/// Start the selected machine from a firmware archive or system directory.
 #[no_mangle]
 pub extern "C" fn retro_load_game(info: *const RetroGameInfo) -> bool {
     unsafe {
-        if !info.is_null() {
-            report_error("WQXEmu does not load firmware as content");
-            return false;
-        }
         if !request_pixel_format() {
             return false;
         }
 
-        let Some(system_dir) = SYSTEM_DIR.as_deref() else {
-            report_error("RetroArch system directory is not configured");
-            return false;
-        };
-        let model = selected_model();
-        let files = match firmware_files_for_model(Path::new(system_dir), model) {
-            Ok(files) => files,
+        let (model, files) = match resolve_firmware(info) {
+            Ok(firmware) => firmware,
             Err(error) => {
-                report_error(&format!(
-                    "Failed to load {} firmware from the RetroArch system directory: {error}",
-                    model.name()
-                ));
+                report_error(&format!("Failed to load firmware: {error}"));
                 return false;
             }
         };
-        if let Err(error) = files.validate_for_model(model) {
-            report_error(&error.to_string());
-            return false;
-        }
 
         let firmware_fingerprint = match files.fingerprint() {
             Ok(fingerprint) => fingerprint,
@@ -641,35 +692,52 @@ pub extern "C" fn retro_load_game(info: *const RetroGameInfo) -> bool {
         };
 
         emu.reset();
-        let persistent_path = SAVE_DIR
-            .as_deref()
-            .map(Path::new)
-            .map(|save_dir| persistent_state_path(save_dir, model, firmware_fingerprint));
-        if let Some(path) = persistent_path.as_deref().filter(|path| path.is_file()) {
-            match read_persistent_state_file(path)
-                .and_then(|state| emu.load_persistent_state(&state))
-            {
-                Ok(()) => log::info!("Persistent state loaded from {}", path.display()),
-                Err(error) => report_error(&format!(
-                    "Ignoring invalid persistent state {}: {error}",
-                    path.display()
-                )),
+        #[cfg(not(target_os = "emscripten"))]
+        let persistent_path: Option<PathBuf> = {
+            let path = SAVE_DIR
+                .as_deref()
+                .map(Path::new)
+                .map(|save_dir| persistent_state_path(save_dir, model, firmware_fingerprint));
+            if let Some(path) = path.as_deref().filter(|path| path.is_file()) {
+                match read_persistent_state_file(path)
+                    .and_then(|state| emu.load_persistent_state(&state))
+                {
+                    Ok(()) => log::info!("Persistent state loaded from {}", path.display()),
+                    Err(error) => report_error(&format!(
+                        "Ignoring invalid persistent state {}: {error}",
+                        path.display()
+                    )),
+                }
             }
-        }
+            path
+        };
+        #[cfg(target_os = "emscripten")]
+        let persistent_path: Option<PathBuf> = None;
+        #[cfg(target_os = "emscripten")]
+        let _ = firmware_fingerprint;
         let mut frontend_input = FrontendInputState::default();
         frontend_input.release_all(|key_id, down| emu.set_key(key_id, down));
         PERSISTENT_STATE_PATH = persistent_path;
         EMULATOR = Some(emu);
         FRONTEND_INPUT = Some(frontend_input);
 
-        log::info!(
-            "Started {} from the RetroArch system directory",
-            model.name()
-        );
-        show_message(
-            "Physical keyboard: enable Game Focus (default: Scroll Lock)",
-            300,
-        );
+        let source = if info.is_null() {
+            "the RetroArch system directory"
+        } else {
+            "the content archive"
+        };
+        log::info!("Started {} from {source}", model.name());
+        if cfg!(target_os = "emscripten") {
+            show_message(
+                "WQXEmu: use the on-screen controls to operate the device",
+                300,
+            );
+        } else {
+            show_message(
+                "Physical keyboard: enable Game Focus (default: Scroll Lock)",
+                300,
+            );
+        }
         true
     }
 }
