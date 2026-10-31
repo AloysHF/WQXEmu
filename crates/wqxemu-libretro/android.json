@@ -9,7 +9,14 @@
   },
   "short_name": "WQX",
   "manufacturer": "Wenquxing",
-  "supported_extensions": ["rom", "bin", "fls", "nor", "nand", "nand0"],
+  "supported_extensions": [
+    "rom",
+    "bin",
+    "fls",
+    "nor",
+    "nand",
+    "nand0"
+  ],
   "save_state_format": 1,
   "firmware": [
     {
@@ -30,7 +37,7 @@
     },
     {
       "file": "WQXEmu/pc1000/pc1000.rom",
-      "required": true,
+      "required": false,
       "hint": {
         "en": "PC1000 system ROM dump; needed when the PC1000 model is selected.",
         "zh": "PC1000 系统 ROM 转储；选择 PC1000 机型时需要。"
@@ -38,7 +45,7 @@
     },
     {
       "file": "WQXEmu/pc1000/pc1000.nor",
-      "required": true,
+      "required": false,
       "hint": {
         "en": "PC1000 NOR Flash dump; needed when the PC1000 model is selected.",
         "zh": "PC1000 NOR Flash 转储；选择 PC1000 机型时需要。"
@@ -46,7 +53,7 @@
     },
     {
       "file": "WQXEmu/cc800/obj.bin",
-      "required": true,
+      "required": false,
       "hint": {
         "en": "CC800 system ROM (obj.bin); needed when the CC800 model is selected.",
         "zh": "CC800 系统 ROM（obj.bin）；选择 CC800 机型时需要。"
@@ -54,7 +61,7 @@
     },
     {
       "file": "WQXEmu/cc800/cc800.fls",
-      "required": true,
+      "required": false,
       "hint": {
         "en": "CC800 NOR Flash dump; needed when the CC800 model is selected.",
         "zh": "CC800 NOR Flash 转储；选择 CC800 机型时需要。"
@@ -62,7 +69,7 @@
     },
     {
       "file": "WQXEmu/nc2000/nc2000.nor",
-      "required": true,
+      "required": false,
       "hint": {
         "en": "NC2000 NOR Flash dump; needed when the NC2000 model is selected.",
         "zh": "NC2000 NOR Flash 转储；选择 NC2000 机型时需要。"
@@ -70,7 +77,7 @@
     },
     {
       "file": "WQXEmu/nc2000/nc2000.nand",
-      "required": true,
+      "required": false,
       "hint": {
         "en": "NC2000 NAND Flash dump; needed when the NC2000 model is selected.",
         "zh": "NC2000 NAND Flash 转储；选择 NC2000 机型时需要。"
@@ -78,7 +85,7 @@
     },
     {
       "file": "WQXEmu/nc2000/nc2000.nand0",
-      "required": true,
+      "required": false,
       "hint": {
         "en": "NC2000 first NAND plane; needed when the NC2000 model is selected.",
         "zh": "NC2000 第一 NAND 平面；选择 NC2000 机型时需要。"
@@ -86,7 +93,7 @@
     },
     {
       "file": "WQXEmu/nc3000/nc3000.nor",
-      "required": true,
+      "required": false,
       "hint": {
         "en": "NC3000 NOR Flash dump; needed when the NC3000 model is selected.",
         "zh": "NC3000 NOR Flash 转储；选择 NC3000 机型时需要。"
@@ -94,7 +101,7 @@
     },
     {
       "file": "WQXEmu/nc3000/nc3000.nand",
-      "required": true,
+      "required": false,
       "hint": {
         "en": "NC3000 NAND Flash dump; needed when the NC3000 model is selected.",
         "zh": "NC3000 NAND Flash 转储；选择 NC3000 机型时需要。"
