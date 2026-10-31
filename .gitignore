@@ -9,5 +9,5 @@ Cargo.lock
 *.dylib
 *.exe
 *.pdb
-CLAUDE.md
+AGENTS.md
 preview/
