@@ -723,7 +723,7 @@ pub extern "C" fn retro_get_system_info(info: *mut RetroSystemInfo) {
     guard((), || unsafe {
         (*info) = RetroSystemInfo {
             library_name: c"WQXEmu".as_ptr(),
-            library_version: c"0.1.0".as_ptr(),
+            library_version: concat!(env!("CARGO_PKG_VERSION"), "\0").as_ptr().cast(),
             valid_extensions: VALID_EXTENSIONS.as_ptr(),
             need_fullpath: true,
             block_extract: false,
