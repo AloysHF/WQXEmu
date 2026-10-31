@@ -173,6 +173,9 @@ pub struct Pc1000Machine {
     music_sample: i16,
 
     nor_dirty: bool,
+    /// Debug: per-64-byte NOR read map (only allocated when WQX_NORTRACE=1).
+    #[serde(skip)]
+    nor_read_map: Option<Vec<u8>>,
     audio: Audio,
     lcd: Lcd,
 }
@@ -211,6 +214,11 @@ impl Pc1000Machine {
             is_play_music: false,
             music_sample: 1,
             nor_dirty: false,
+            nor_read_map: if std::env::var_os("WQX_NORTRACE").is_some() {
+                Some(vec![0u8; NOR_SIZE / 64])
+            } else {
+                None
+            },
             audio: Audio::new(),
             lcd: Lcd::new(),
         };
@@ -657,7 +665,12 @@ impl Pc1000Machine {
     }
 
     /// NOR read with command side effects (software ID, info block...).
-    fn nor_read(&self, addr: u16, offset: usize) -> u8 {
+    fn nor_read(&mut self, addr: u16, offset: usize) -> u8 {
+        if let Some(map) = self.nor_read_map.as_mut() {
+            if let Some(slot) = map.get_mut(offset / 64) {
+                *slot = 1;
+            }
+        }
         match self.fp_type {
             NorCmd::InfoRead if self.fp_step == 3 => self.nor_info_block[offset % 0x100],
             NorCmd::SwId if self.fp_step == 3 => match addr {
@@ -866,6 +879,23 @@ impl Machine for Pc1000Machine {
 
     fn load_rom(&mut self, files: &RomFiles) -> Result<()> {
         self.load_rom_impl(files)
+    }
+
+    fn debug_nor_window(&self, off: usize, len: usize) -> Vec<u8> {
+        let end = (off + len).min(self.nor.len());
+        if off < end {
+            self.nor[off..end].to_vec()
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn debug_nor_read_map(&self) -> Vec<u8> {
+        self.nor_read_map.clone().unwrap_or_default()
+    }
+
+    fn debug_fill_nor(&mut self, val: u8) {
+        self.nor.fill(val);
     }
 
     fn set_key(&mut self, key_id: u8, pressed: bool) {
