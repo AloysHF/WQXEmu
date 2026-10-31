@@ -360,7 +360,18 @@ unsafe fn resolve_firmware(info: *const RetroGameInfo) -> anyhow::Result<(Machin
                 .to_str()
                 .context("Content path is not valid UTF-8")?;
             if !path.is_empty() {
-                return firmware_files_from_content(Path::new(path));
+                match firmware_files_from_content(Path::new(path)) {
+                    Ok(resolved) => return Ok(resolved),
+                    Err(error) if SYSTEM_DIR.is_some() => {
+                        // Android frontends hand over a single cached document,
+                        // so the other dumps of the set are never beside it.
+                        // The system directory is the authoritative copy there.
+                        log::warn!(
+                            "Content firmware set unusable ({error}); using the system directory"
+                        );
+                    }
+                    Err(error) => return Err(error),
+                }
             }
         }
     }
