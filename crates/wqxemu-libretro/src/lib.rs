@@ -225,46 +225,65 @@ fn firmware_files_for_model(
     wqxemu_core::RomFiles::from_dir(&system_dir.join("WQXEmu").join(model.name()))
 }
 
-/// Resolve firmware dumps from an extracted content archive.
+/// Resolve firmware dumps from a content path.
 ///
-/// EmulatorJS hands the core the path of the first archive entry whose
-/// extension is listed in `core.json`. The remaining firmware files are
-/// extracted beside it, so the parent directory holds every dump of one
-/// model. A top-level folder (or a file name) may name the model; otherwise
-/// the dumps are auto-detected.
-#[cfg(target_os = "emscripten")]
+/// The core boots a machine rather than a game, so the content path names
+/// either a directory of dumps or one dump whose sibling files complete the
+/// set. RetroDroid copies the user's selection into an app-private cache
+/// directory, so the parent directory holds every file of one model. A folder
+/// or file name may name the model; otherwise the core option decides.
 fn firmware_files_from_content(content: &Path) -> anyhow::Result<(MachineModel, RomFiles)> {
-    let dir = content
-        .parent()
-        .filter(|dir| !dir.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("/"));
+    let dir = if content.is_dir() {
+        content
+    } else {
+        content
+            .parent()
+            .filter(|dir| !dir.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("/"))
+    };
     let files = RomFiles::from_dir(dir)?;
     let named_model = dir
         .file_name()
         .and_then(|name| name.to_str())
         .or_else(|| content.file_stem().and_then(|name| name.to_str()))
         .and_then(MachineModel::from_name);
-    let model = named_model.unwrap_or_else(|| detect_model(&files));
+    let model = named_model.unwrap_or_else(|| content_model(&files));
     files
         .validate_for_model(model)
-        .with_context(|| format!("Invalid {} firmware archive", model.name()))?;
+        .with_context(|| format!("Invalid {} firmware set", model.name()))?;
     Ok((model, files))
+}
+
+/// Model assumed for an unnamed content directory.
+fn content_model(files: &RomFiles) -> MachineModel {
+    #[cfg(target_os = "emscripten")]
+    {
+        detect_model(files)
+    }
+    #[cfg(not(target_os = "emscripten"))]
+    {
+        let _ = files;
+        unsafe { selected_model() }
+    }
 }
 
 /// Select the firmware and model for a new session.
 unsafe fn resolve_firmware(info: *const RetroGameInfo) -> anyhow::Result<(MachineModel, RomFiles)> {
-    #[cfg(target_os = "emscripten")]
     if !info.is_null() {
-        let path = (*info).path;
-        anyhow::ensure!(!path.is_null(), "WQXEmu received no firmware path");
-        let path = CStr::from_ptr(path)
-            .to_str()
-            .context("Firmware path is not valid UTF-8")?;
-        return firmware_files_from_content(Path::new(path));
+        let info = &*info;
+        anyhow::ensure!(
+            info.data.is_null() && info.size == 0,
+            "WQXEmu loads firmware from disk and does not support in-memory content"
+        );
+        if !info.path.is_null() {
+            let path = CStr::from_ptr(info.path)
+                .to_str()
+                .context("Content path is not valid UTF-8")?;
+            if !path.is_empty() {
+                return firmware_files_from_content(Path::new(path));
+            }
+        }
     }
-
-    #[cfg(not(target_os = "emscripten"))]
-    anyhow::ensure!(info.is_null(), "WQXEmu does not load firmware as content");
 
     let system_dir = SYSTEM_DIR
         .as_deref()
@@ -611,16 +630,15 @@ pub extern "C" fn retro_deinit() {
 /// Get system information
 #[no_mangle]
 pub extern "C" fn retro_get_system_info(info: *mut RetroSystemInfo) {
-    #[cfg(target_os = "emscripten")]
-    const VALID_EXTENSIONS: &CStr = c"zip|rom|bin|fls|nor|nand|nand0";
-    #[cfg(not(target_os = "emscripten"))]
-    const VALID_EXTENSIONS: &CStr = c"";
+    /// Firmware dumps the core can boot from. The frontend hands over a real
+    /// file (or directory) path, never an archive or a memory buffer.
+    const VALID_EXTENSIONS: &CStr = c"rom|bin|fls|nor|nand|nand0";
     unsafe {
         (*info) = RetroSystemInfo {
             library_name: c"WQXEmu".as_ptr(),
             library_version: c"0.1.0".as_ptr(),
             valid_extensions: VALID_EXTENSIONS.as_ptr(),
-            need_fullpath: cfg!(target_os = "emscripten"),
+            need_fullpath: true,
             block_extract: false,
         };
     }
@@ -656,7 +674,7 @@ pub extern "C" fn retro_set_controller_port_device(_port: u32, _device: u32) {
     // WQXEmu uses the standard RetroPad on port 0.
 }
 
-/// Start the selected machine from a firmware archive or system directory.
+/// Start the selected machine from a content path or the system directory.
 #[no_mangle]
 pub extern "C" fn retro_load_game(info: *const RetroGameInfo) -> bool {
     unsafe {
@@ -722,9 +740,9 @@ pub extern "C" fn retro_load_game(info: *const RetroGameInfo) -> bool {
         FRONTEND_INPUT = Some(frontend_input);
 
         let source = if info.is_null() {
-            "the RetroArch system directory"
+            "the system directory"
         } else {
-            "the content archive"
+            "the content path"
         };
         log::info!("Started {} from {source}", model.name());
         if cfg!(target_os = "emscripten") {
@@ -1066,6 +1084,34 @@ mod tests {
         let files = firmware_files_for_model(system_dir.path(), MachineModel::Nc1020).unwrap();
         assert_eq!(files.nor, Some(model_dir.join("custom.fls")));
         files.validate_for_model(MachineModel::Nc1020).unwrap();
+    }
+
+    #[test]
+    fn resolves_firmware_from_a_content_path() {
+        let root = tempfile::tempdir().unwrap();
+        let content = root.path().join("NC1020");
+        std::fs::create_dir_all(&content).unwrap();
+        std::fs::write(content.join("obj_lu.bin"), b"dump").unwrap();
+        std::fs::write(content.join("nc1020.fls"), b"dump").unwrap();
+
+        // Both the directory itself and one file inside it name the set.
+        for path in [content.clone(), content.join("obj_lu.bin")] {
+            let (model, files) = firmware_files_from_content(&path).unwrap();
+            assert_eq!(model, MachineModel::Nc1020);
+            assert!(files.rom.is_some());
+            assert!(files.nor.is_some());
+        }
+    }
+
+    #[test]
+    fn rejects_content_directories_with_the_wrong_dump_set() {
+        let root = tempfile::tempdir().unwrap();
+        let content = root.path().join("nc1020");
+        std::fs::create_dir_all(&content).unwrap();
+        std::fs::write(content.join("obj_lu.bin"), b"dump").unwrap();
+
+        let error = firmware_files_from_content(&content).unwrap_err();
+        assert!(format!("{error:#}").contains("NOR Flash"));
     }
 
     #[test]
