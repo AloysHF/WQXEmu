@@ -45,7 +45,14 @@ const RETRO_ENVIRONMENT_SET_KEYBOARD_CALLBACK: u32 = 12;
 const RETRO_ENVIRONMENT_GET_VARIABLE: u32 = 15;
 const RETRO_ENVIRONMENT_SET_VARIABLES: u32 = 16;
 const RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME: u32 = 18;
+const RETRO_ENVIRONMENT_GET_LOG_INTERFACE: u32 = 27;
 const RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY: u32 = 31;
+
+// Log levels
+const RETRO_LOG_DEBUG: u32 = 0;
+const RETRO_LOG_INFO: u32 = 1;
+const RETRO_LOG_WARN: u32 = 2;
+const RETRO_LOG_ERROR: u32 = 3;
 
 // Pixel format
 const RETRO_PIXEL_FORMAT_XRGB8888: u32 = 1;
@@ -119,6 +126,13 @@ type RetroKeyboardEventT =
 #[repr(C)]
 struct RetroKeyboardCallback {
     callback: RetroKeyboardEventT,
+}
+
+type RetroLogT = Option<unsafe extern "C" fn(level: u32, fmt: *const c_char, ...)>;
+
+#[repr(C)]
+struct RetroLogCallback {
+    log: RetroLogT,
 }
 
 #[repr(C)]
@@ -196,6 +210,52 @@ static mut SYSTEM_DIR: Option<String> = None;
 static mut SAVE_DIR: Option<String> = None;
 static mut PERSISTENT_STATE_PATH: Option<PathBuf> = None;
 static mut FRONTEND_INPUT: Option<FrontendInputState> = None;
+static mut LOG_CB: RetroLogT = None;
+
+// ============================================================
+// Frontend logging
+// ============================================================
+
+/// Forwards the `log` crate to the frontend's log interface.
+///
+/// RetroDroid (and RetroArch) surface this in their log viewer, which is the
+/// only place a failed load can be diagnosed on Android.
+struct FrontendLogger;
+
+static FRONTEND_LOGGER: FrontendLogger = FrontendLogger;
+
+impl log::Log for FrontendLogger {
+    fn enabled(&self, _metadata: &log::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        unsafe {
+            let Some(callback) = LOG_CB else {
+                return;
+            };
+            let Ok(message) = CString::new(record.args().to_string()) else {
+                return;
+            };
+            callback(
+                retro_log_level(record.level()),
+                c"%s".as_ptr(),
+                message.as_ptr(),
+            );
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+fn retro_log_level(level: log::Level) -> u32 {
+    match level {
+        log::Level::Error => RETRO_LOG_ERROR,
+        log::Level::Warn => RETRO_LOG_WARN,
+        log::Level::Info => RETRO_LOG_INFO,
+        log::Level::Debug | log::Level::Trace => RETRO_LOG_DEBUG,
+    }
+}
 
 // ============================================================
 // Helper functions
@@ -609,6 +669,17 @@ pub extern "C" fn retro_init() {
         {
             SAVE_DIR = Some(CStr::from_ptr(save_dir).to_string_lossy().into_owned());
         }
+
+        let mut log_callback = RetroLogCallback { log: None };
+        if environment(
+            RETRO_ENVIRONMENT_GET_LOG_INTERFACE,
+            &mut log_callback as *mut RetroLogCallback as *mut c_void,
+        ) {
+            LOG_CB = log_callback.log;
+        }
+        if LOG_CB.is_some() && log::set_logger(&FRONTEND_LOGGER).is_ok() {
+            log::set_max_level(log::LevelFilter::Trace);
+        }
     }
     log::info!("WQXEmu libretro core initialized");
 }
@@ -790,6 +861,9 @@ pub extern "C" fn retro_load_game_special(
     _info: *const RetroGameInfo,
     _num_info: usize,
 ) -> bool {
+    unsafe {
+        report_error("WQXEmu does not support libretro subsystems; load a firmware set instead");
+    }
     false
 }
 
