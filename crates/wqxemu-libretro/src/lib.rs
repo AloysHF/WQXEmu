@@ -269,6 +269,26 @@ unsafe fn get_emulator_mut() -> &'static mut Emulator {
     EMULATOR.as_mut().expect("Emulator not initialized")
 }
 
+/// Run `body`, turning a panic into `fallback`.
+///
+/// A panic must never unwind across the C ABI: the frontend is a host process
+/// (RetroArch, RetroDroid) that would be torn down with us. Swallowing the
+/// panic keeps the session recoverable and leaves a log entry behind.
+fn guard<T>(fallback: T, body: impl FnOnce() -> T) -> T {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+        Ok(value) => value,
+        Err(payload) => {
+            let detail = payload
+                .downcast_ref::<&str>()
+                .map(|text| (*text).to_owned())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "unknown panic".to_owned());
+            log::error!("WQXEmu libretro entry point panicked: {detail}");
+            fallback
+        }
+    }
+}
+
 unsafe fn environment(cmd: u32, data: *mut c_void) -> bool {
     ENV_CB.map(|cb| cb(cmd, data)).unwrap_or(false)
 }
@@ -572,81 +592,77 @@ unsafe extern "C" fn keyboard_event(
 /// Set environment callback
 #[no_mangle]
 pub extern "C" fn retro_set_environment(cb: RetroEnvironmentT) {
-    unsafe {
+    guard((), || unsafe {
         ENV_CB = cb;
-    }
-    // Set input descriptors
-    set_input_descriptors();
-    // Set core variables
-    set_core_variables();
-    let mut supports_no_game = true;
-    unsafe {
+        // Set input descriptors
+        set_input_descriptors();
+        // Set core variables
+        set_core_variables();
+        let mut supports_no_game = true;
         environment(
             RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME,
             &mut supports_no_game as *mut bool as *mut c_void,
         );
-    }
-    let mut keyboard_callback = RetroKeyboardCallback {
-        callback: Some(keyboard_event),
-    };
-    unsafe {
+        let mut keyboard_callback = RetroKeyboardCallback {
+            callback: Some(keyboard_event),
+        };
         environment(
             RETRO_ENVIRONMENT_SET_KEYBOARD_CALLBACK,
             &mut keyboard_callback as *mut RetroKeyboardCallback as *mut c_void,
         );
-    }
+    });
 }
 
 /// Set video refresh callback
 #[no_mangle]
 pub extern "C" fn retro_set_video_refresh(cb: RetroVideoRefreshT) {
-    unsafe {
+    guard((), || unsafe {
         VIDEO_CB = cb;
-    }
+    });
 }
 
 /// Set audio sample callback
 #[no_mangle]
 pub extern "C" fn retro_set_audio_sample(cb: RetroAudioSampleT) {
-    unsafe {
+    guard((), || unsafe {
         AUDIO_CB = cb;
-    }
+    });
 }
 
 /// Set audio sample batch callback
 #[no_mangle]
 pub extern "C" fn retro_set_audio_sample_batch(cb: RetroAudioSampleBatchT) {
-    unsafe {
+    guard((), || unsafe {
         AUDIO_BATCH_CB = cb;
-    }
+    });
 }
 
 /// Set input poll callback
 #[no_mangle]
 pub extern "C" fn retro_set_input_poll(cb: RetroInputPollT) {
-    unsafe {
+    guard((), || unsafe {
         INPUT_POLL_CB = cb;
-    }
+    });
 }
 
 /// Set input state callback
 #[no_mangle]
 pub extern "C" fn retro_set_input_state(cb: RetroInputStateT) {
-    unsafe {
+    guard((), || unsafe {
         INPUT_STATE_CB = cb;
-    }
+    });
 }
 
 /// Return API version
 #[no_mangle]
 pub extern "C" fn retro_api_version() -> u32 {
-    RETRO_API_VERSION
+    guard(RETRO_API_VERSION, || RETRO_API_VERSION)
 }
 
 /// Initialize the core
 #[no_mangle]
 pub extern "C" fn retro_init() {
-    unsafe {
+    guard((), || unsafe {
         // Get system directory
         SYSTEM_DIR = None;
         SAVE_DIR = None;
@@ -680,22 +696,22 @@ pub extern "C" fn retro_init() {
         if LOG_CB.is_some() && log::set_logger(&FRONTEND_LOGGER).is_ok() {
             log::set_max_level(log::LevelFilter::Trace);
         }
-    }
-    log::info!("WQXEmu libretro core initialized");
+        log::info!("WQXEmu libretro core initialized");
+    });
 }
 
 /// Deinitialize the core
 #[no_mangle]
 pub extern "C" fn retro_deinit() {
-    unsafe {
+    guard((), || unsafe {
         persist_active_emulator();
         EMULATOR = None;
         FRONTEND_INPUT = None;
         SYSTEM_DIR = None;
         SAVE_DIR = None;
         PERSISTENT_STATE_PATH = None;
-    }
-    log::info!("WQXEmu libretro core deinitialized");
+        log::info!("WQXEmu libretro core deinitialized");
+    });
 }
 
 /// Get system information
@@ -704,7 +720,7 @@ pub extern "C" fn retro_get_system_info(info: *mut RetroSystemInfo) {
     /// Firmware dumps the core can boot from. The frontend hands over a real
     /// file (or directory) path, never an archive or a memory buffer.
     const VALID_EXTENSIONS: &CStr = c"rom|bin|fls|nor|nand|nand0";
-    unsafe {
+    guard((), || unsafe {
         (*info) = RetroSystemInfo {
             library_name: c"WQXEmu".as_ptr(),
             library_version: c"0.1.0".as_ptr(),
@@ -712,13 +728,13 @@ pub extern "C" fn retro_get_system_info(info: *mut RetroSystemInfo) {
             need_fullpath: true,
             block_extract: false,
         };
-    }
+    });
 }
 
 /// Get system AV information
 #[no_mangle]
 pub extern "C" fn retro_get_system_av_info(info: *mut RetroSystemAvInfo) {
-    unsafe {
+    guard((), || unsafe {
         let fps = EMULATOR
             .as_ref()
             .map(|emulator| emulator.frame_rate() as f64)
@@ -736,19 +752,20 @@ pub extern "C" fn retro_get_system_av_info(info: *mut RetroSystemAvInfo) {
                 sample_rate: 44100.0,
             },
         };
-    }
+    });
 }
 
 /// Set controller port device
 #[no_mangle]
 pub extern "C" fn retro_set_controller_port_device(_port: u32, _device: u32) {
-    // WQXEmu uses the standard RetroPad on port 0.
+    // WQXEmu uses the standard RetroPad on port 0; nothing to configure.
+    guard((), || {});
 }
 
 /// Start the selected machine from a content path or the system directory.
 #[no_mangle]
 pub extern "C" fn retro_load_game(info: *const RetroGameInfo) -> bool {
-    unsafe {
+    guard(false, || unsafe {
         if !request_pixel_format() {
             return false;
         }
@@ -828,30 +845,32 @@ pub extern "C" fn retro_load_game(info: *const RetroGameInfo) -> bool {
             );
         }
         true
-    }
+    })
 }
 
 /// Unload a game
 #[no_mangle]
 pub extern "C" fn retro_unload_game() {
-    unsafe {
+    guard((), || unsafe {
         persist_active_emulator();
         EMULATOR = None;
         FRONTEND_INPUT = None;
         PERSISTENT_STATE_PATH = None;
-    }
+    });
 }
 
 /// Reset active cheat codes.
 #[no_mangle]
 pub extern "C" fn retro_cheat_reset() {
     // Cheats are not supported by this core.
+    guard((), || {});
 }
 
 /// Add or update a cheat code.
 #[no_mangle]
 pub extern "C" fn retro_cheat_set(_index: u32, _enabled: bool, _code: *const c_char) {
     // Cheats are not supported by this core.
+    guard((), || {});
 }
 
 /// Load content through a libretro subsystem.
@@ -861,16 +880,16 @@ pub extern "C" fn retro_load_game_special(
     _info: *const RetroGameInfo,
     _num_info: usize,
 ) -> bool {
-    unsafe {
+    guard(false, || unsafe {
         report_error("WQXEmu does not support libretro subsystems; load a firmware set instead");
-    }
-    false
+        false
+    })
 }
 
 /// Run one frame
 #[no_mangle]
 pub extern "C" fn retro_run() {
-    unsafe {
+    guard((), || unsafe {
         // Poll input
         if let Some(poll) = INPUT_POLL_CB {
             poll();
@@ -914,13 +933,13 @@ pub extern "C" fn retro_run() {
                 }
             }
         }
-    }
+    });
 }
 
 /// Serialize save state
 #[no_mangle]
 pub extern "C" fn retro_serialize(data: *mut c_void, size: usize) -> bool {
-    unsafe {
+    guard(false, || unsafe {
         if data.is_null() {
             return false;
         }
@@ -948,13 +967,13 @@ pub extern "C" fn retro_serialize(data: *mut c_void, size: usize) -> bool {
             return false;
         }
         true
-    }
+    })
 }
 
 /// Deserialize save state
 #[no_mangle]
 pub extern "C" fn retro_unserialize(data: *const c_void, size: usize) -> bool {
-    unsafe {
+    guard(false, || unsafe {
         if data.is_null() {
             return false;
         }
@@ -985,46 +1004,50 @@ pub extern "C" fn retro_unserialize(data: *const c_void, size: usize) -> bool {
         }
 
         true
-    }
+    })
 }
 
 /// Get save state size
 #[no_mangle]
 pub extern "C" fn retro_serialize_size() -> usize {
-    SERIALIZATION_BUFFER_SIZE
+    guard(SERIALIZATION_BUFFER_SIZE, || SERIALIZATION_BUFFER_SIZE)
 }
 
 /// Get memory data
 #[no_mangle]
 pub extern "C" fn retro_get_memory_data(id: u32) -> *mut c_void {
-    let _ = id;
-    ptr::null_mut()
+    guard(ptr::null_mut(), || {
+        let _ = id;
+        ptr::null_mut()
+    })
 }
 
 /// Get memory size
 #[no_mangle]
 pub extern "C" fn retro_get_memory_size(id: u32) -> usize {
-    let _ = id;
-    0
+    guard(0, || {
+        let _ = id;
+        0
+    })
 }
 
 /// Reset the core
 #[no_mangle]
 pub extern "C" fn retro_reset() {
-    unsafe {
+    guard((), || unsafe {
         if let Some(ref mut emu) = EMULATOR {
             emu.reset();
         }
         if let Some(ref mut input) = FRONTEND_INPUT {
             input.reset_applied();
         }
-    }
+    });
 }
 
 /// Get region
 #[no_mangle]
 pub extern "C" fn retro_get_region() -> u32 {
-    RETRO_REGION_NTSC
+    guard(RETRO_REGION_NTSC, || RETRO_REGION_NTSC)
 }
 
 // ============================================================
