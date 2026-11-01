@@ -66,6 +66,10 @@ const SERIALIZATION_HEADER_SIZE: usize = 12;
 const SERIALIZATION_MAGIC: &[u8; 4] = b"WQXS";
 const SERIALIZATION_FORMAT_VERSION: u8 = 1;
 
+/// The error reported when the frontend supplies no content path.
+const MISSING_CONTENT_PATH: &str =
+    "The frontend passed no content path; this core loads content from a file path only.";
+
 // Joypad constants
 const RETRO_DEVICE_JOYPAD: u32 = 1;
 const RETRO_DEVICE_ID_JOYPAD_B: u32 = 0;
@@ -348,32 +352,16 @@ fn content_model(files: &RomFiles) -> MachineModel {
 }
 
 /// Select the firmware and model for a new session.
-unsafe fn resolve_firmware(info: *const RetroGameInfo) -> anyhow::Result<(MachineModel, RomFiles)> {
-    if !info.is_null() {
-        let info = &*info;
-        anyhow::ensure!(
-            info.data.is_null() && info.size == 0,
-            "WQXEmu loads firmware from disk and does not support in-memory content"
-        );
-        if !info.path.is_null() {
-            let path = CStr::from_ptr(info.path)
-                .to_str()
-                .context("Content path is not valid UTF-8")?;
-            if !path.is_empty() {
-                match firmware_files_from_content(Path::new(path)) {
-                    Ok(resolved) => return Ok(resolved),
-                    Err(error) if SYSTEM_DIR.is_some() => {
-                        // Android frontends hand over a single cached document,
-                        // so the other dumps of the set are never beside it.
-                        // The system directory is the authoritative copy there.
-                        log::warn!(
-                            "Content firmware set unusable ({error}); using the system directory"
-                        );
-                    }
-                    Err(error) => return Err(error),
-                }
-            }
+unsafe fn resolve_firmware(content: &Path) -> anyhow::Result<(MachineModel, RomFiles)> {
+    match firmware_files_from_content(content) {
+        Ok(resolved) => return Ok(resolved),
+        Err(error) if SYSTEM_DIR.is_some() => {
+            // Android frontends hand over a single cached document,
+            // so the other dumps of the set are never beside it.
+            // The system directory is the authoritative copy there.
+            log::warn!("Content firmware set unusable ({error}); using the system directory");
         }
+        Err(error) => return Err(error),
     }
 
     let system_dir = SYSTEM_DIR
@@ -773,15 +761,31 @@ pub extern "C" fn retro_set_controller_port_device(_port: u32, _device: u32) {
     guard((), || {});
 }
 
-/// Start the selected machine from a content path or the system directory.
+/// Start the selected machine from the content path.
 #[no_mangle]
 pub extern "C" fn retro_load_game(info: *const RetroGameInfo) -> bool {
     guard(false, || unsafe {
+        let Some(info) = info.as_ref() else {
+            report_error(MISSING_CONTENT_PATH);
+            return false;
+        };
+        if info.path.is_null() {
+            report_error(MISSING_CONTENT_PATH);
+            return false;
+        }
+        let content = match CStr::from_ptr(info.path).to_str() {
+            Ok(path) => Path::new(path),
+            Err(_) => {
+                report_error("WQXEmu: the content path is not valid UTF-8.");
+                return false;
+            }
+        };
+
         if !request_pixel_format() {
             return false;
         }
 
-        let (model, files) = match resolve_firmware(info) {
+        let (model, files) = match resolve_firmware(content) {
             Ok(firmware) => firmware,
             Err(error) => {
                 report_error(&format!("Failed to load firmware: {error}"));
@@ -838,12 +842,7 @@ pub extern "C" fn retro_load_game(info: *const RetroGameInfo) -> bool {
         EMULATOR = Some(emu);
         FRONTEND_INPUT = Some(frontend_input);
 
-        let source = if info.is_null() {
-            "the system directory"
-        } else {
-            "the content path"
-        };
-        log::info!("Started {} from {source}", model.name());
+        log::info!("Started {} from {}", model.name(), content.display());
         if cfg!(target_os = "emscripten") {
             show_message(
                 "WQXEmu: use the on-screen controls to operate the device",

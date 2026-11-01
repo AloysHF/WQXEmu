@@ -132,10 +132,10 @@ Rules the core follows for any Android host:
 - Saves and persistent session files go to the directory answered by
   `RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY`; the content path may be a throwaway
   copy in the app cache, so nothing is written next to it.
-- Firmware is read from the path answered by
-  `RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY` (as `WQXEmu/<model>/`) or from the
-  content path the frontend hands over. RetroDroid passes a real file path and
-  the core never accepts in-memory content.
+- Firmware is read from the content path the frontend hands over; if that
+  cached set is unusable, the core falls back to
+  `RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY` (`WQXEmu/<model>/`). A real file
+  path is required and an in-memory buffer is ignored.
 - Load failures are reported with `RETRO_ENVIRONMENT_SET_MESSAGE` and through
   the frontend log interface, never as a silent `false`.
 - Panics are caught at the C ABI boundary (`catch_unwind` in every exported
