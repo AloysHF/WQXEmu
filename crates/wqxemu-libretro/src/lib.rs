@@ -128,8 +128,16 @@ struct RetroKeyboardCallback {
     callback: RetroKeyboardEventT,
 }
 
-type RetroLogT = Option<unsafe extern "C" fn(level: u32, fmt: *const c_char, ...)>;
+/// Frontend logging callback.
+///
+/// libretro declares it C-variadic, but over wasm the callee signature carries
+/// a hidden varargs pointer, so calling it from Rust traps with "function
+/// signature mismatch". Native builds call it with the message as the format
+/// string and no arguments; Emscripten builds log to stderr instead.
+#[cfg(not(target_os = "emscripten"))]
+type RetroLogT = Option<unsafe extern "C" fn(level: u32, fmt: *const c_char)>;
 
+#[cfg(not(target_os = "emscripten"))]
 #[repr(C)]
 struct RetroLogCallback {
     log: RetroLogT,
@@ -210,6 +218,7 @@ static mut SYSTEM_DIR: Option<String> = None;
 static mut SAVE_DIR: Option<String> = None;
 static mut PERSISTENT_STATE_PATH: Option<PathBuf> = None;
 static mut FRONTEND_INPUT: Option<FrontendInputState> = None;
+#[cfg(not(target_os = "emscripten"))]
 static mut LOG_CB: RetroLogT = None;
 
 // ============================================================
@@ -230,18 +239,23 @@ impl log::Log for FrontendLogger {
     }
 
     fn log(&self, record: &log::Record<'_>) {
+        let message = record.args().to_string();
+
+        // EmulatorJS forwards stderr to the browser console.
+        #[cfg(target_os = "emscripten")]
+        eprintln!("{message}");
+
+        // The message itself is the format string, so percent signs have to be
+        // escaped before reaching the frontend's printf.
+        #[cfg(not(target_os = "emscripten"))]
         unsafe {
             let Some(callback) = LOG_CB else {
                 return;
             };
-            let Ok(message) = CString::new(record.args().to_string()) else {
+            let Ok(message) = CString::new(message.replace('%', "%%")) else {
                 return;
             };
-            callback(
-                retro_log_level(record.level()),
-                c"%s".as_ptr(),
-                message.as_ptr(),
-            );
+            callback(retro_log_level(record.level()), message.as_ptr());
         }
     }
 
@@ -679,14 +693,17 @@ pub extern "C" fn retro_init() {
             SAVE_DIR = Some(CStr::from_ptr(save_dir).to_string_lossy().into_owned());
         }
 
-        let mut log_callback = RetroLogCallback { log: None };
-        if environment(
-            RETRO_ENVIRONMENT_GET_LOG_INTERFACE,
-            &mut log_callback as *mut RetroLogCallback as *mut c_void,
-        ) {
-            LOG_CB = log_callback.log;
+        #[cfg(not(target_os = "emscripten"))]
+        {
+            let mut log_callback = RetroLogCallback { log: None };
+            if environment(
+                RETRO_ENVIRONMENT_GET_LOG_INTERFACE,
+                &mut log_callback as *mut RetroLogCallback as *mut c_void,
+            ) {
+                LOG_CB = log_callback.log;
+            }
         }
-        if LOG_CB.is_some() && log::set_logger(&FRONTEND_LOGGER).is_ok() {
+        if log::set_logger(&FRONTEND_LOGGER).is_ok() {
             log::set_max_level(log::LevelFilter::Trace);
         }
         log::info!("WQXEmu libretro core initialized");
