@@ -1047,12 +1047,13 @@ mod tests {
         Cc800Machine::new(&RomFiles::new(None, None, None, None)).unwrap()
     }
 
-    /// Build RomFiles from the repository-root tmp/roms/ directory, or None if
-    /// the dumps are not present (tests then skip).
+    /// Build RomFiles from the repository-root tmp/roms/wqxemu/cc800 directory,
+    /// or None if the dumps are not present (tests then skip).
     fn cc800_rom_files() -> Option<RomFiles> {
         let base = std::env::var("WQX_ROM_DIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| std::path::PathBuf::from("tmp/roms"))
+            .join("wqxemu")
             .join("cc800");
         let rom = base.join("obj.bin");
         let nor = base.join("cc800.fls");

@@ -392,7 +392,7 @@
                         <div class="qs-step">3</div>
                         <h3 data-i18n="qsStep3Title">运行模拟器</h3>
                         <div class="qs-code">
-                            <code>wqx-emu --model nc1020 \<br>&nbsp;&nbsp;--rom-dir tmp/roms/nc1020</code>
+                            <code>wqx-emu --model nc1020 \<br>&nbsp;&nbsp;--system-dir system</code>
                         </div>
                     </div>
                 </div>
@@ -408,11 +408,11 @@
                                 </tr>
                             </thead>
                             <tbody>
-                                <tr><td>NC1020</td><td>ROM + NOR</td><td>—</td></tr>
-                                <tr><td>PC1000</td><td>ROM + NOR</td><td>—</td></tr>
-                                <tr><td>CC800</td><td>ROM + NOR</td><td>—</td></tr>
-                                <tr><td>NC2000</td><td>NOR + NAND + NAND0</td><td>—</td></tr>
-                                <tr><td>NC3000</td><td>NOR + NAND</td><td>NAND0</td></tr>
+                                <tr><td>NC1020</td><td><code>obj_lu.bin</code> + <code>nc1020.fls</code></td><td>—</td></tr>
+                                <tr><td>PC1000</td><td><code>pc1000.rom</code> + <code>pc1000.nor</code></td><td>—</td></tr>
+                                <tr><td>CC800</td><td><code>obj.bin</code> + <code>cc800.fls</code></td><td>—</td></tr>
+                                <tr><td>NC2000</td><td><code>nc2000.nor</code> + <code>nc2000.nand</code> + <code>nc2000.nand0</code></td><td>—</td></tr>
+                                <tr><td>NC3000</td><td><code>nc3000.nor</code> + <code>nc3000.nand</code></td><td><code>nc3000.nand0</code></td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -460,7 +460,7 @@
                             <pre><code>cargo build --release
 cargo run -p wqxemu --release -- \
   --model nc1020 \
-  --rom-dir tmp/roms/nc1020</code></pre>
+  --system-dir system</code></pre>
                         </div>
                     </div>
                     <div class="build-card">

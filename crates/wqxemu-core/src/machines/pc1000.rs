@@ -1044,12 +1044,13 @@ mod tests {
         Pc1000Machine::new(&RomFiles::new(None, None, None, None)).unwrap()
     }
 
-    /// Build RomFiles from the repository-root tmp/roms/ directory, or None if
-    /// the dumps are not present (tests then skip).
+    /// Build RomFiles from the repository-root tmp/roms/wqxemu/pc1000
+    /// directory, or None if the dumps are not present (tests then skip).
     fn pc1000_rom_files() -> Option<RomFiles> {
         let base = std::env::var("WQX_ROM_DIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| std::path::PathBuf::from("tmp/roms"))
+            .join("wqxemu")
             .join("pc1000");
         let rom = base.join("pc1000.rom");
         let nor = base.join("pc1000.nor");

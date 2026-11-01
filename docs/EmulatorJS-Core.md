@@ -83,38 +83,39 @@ release (≥ 4.2.3) and keep this `cores/` directory.
 
 `site/play.html` in this repository is a complete example.
 
-Unlike the RetroArch core, the browser build takes the firmware set as
-**content**. EmulatorJS extracts the content archive into the wasm filesystem,
-and the core reads every dump from the same directory as the extracted file.
-Firmware is still not game data: the page only exposes a firmware ZIP picker
-and never ships dumps of its own.
+Like the RetroArch core, the browser build boots firmware from a system
+directory rather than from game content. EmulatorJS extracts the content ZIP
+into the root of the wasm filesystem, and the core reads
+`/wqxemu/<model>/` from there. The page only exposes a firmware ZIP picker and
+never ships dumps of its own.
 
 ## Firmware archive layout
 
-A content file itself (for example a single `.rom`) also works when the core
-can auto-detect the model, but a ZIP is the reliable option because it can
-carry the whole dump set:
+The ZIP must contain exactly one model folder below `wqxemu/`:
 
 ```
 nc1020.zip
-  nc1020/
-    obj_lu.bin    # system ROM (.rom / .bin)
-    nc1020.fls    # NOR Flash (.fls / .nor)
+  wqxemu/
+    nc1020/
+      obj_lu.bin
+      nc1020.fls
 ```
 
-The top-level folder name (`nc1020`, `pc1000`, `cc800`, `nc2000`, `nc3000`)
-selects the model. Without a recognized folder name the core falls back to
-content file stem, then auto-detects the model from the dump set. Dumps can
-also be placed at the archive root; EmulatorJS then hands the core the first
-entry with a recognized extension.
+The folder name selects the model (`nc1020`, `pc1000`, `cc800`, `nc2000`,
+`nc3000`). EmulatorJS exposes no core-option UI, so the archive itself names
+the model. An archive with zero or several model folders is rejected rather
+than guessed, and the single-file content that a game-oriented frontend would
+provide cannot boot these machines.
 
-| Model  | Required dumps             |
-|--------|----------------------------|
-| NC1020 | system ROM + NOR           |
-| PC1000 | system ROM + NOR           |
-| CC800  | system ROM + NOR           |
-| NC2000 | NOR + NAND + NAND0         |
-| NC3000 | NOR + NAND (NAND0 optional) |
+File names are case-sensitive and must match the table below exactly.
+
+| Model  | Required files |
+|--------|----------------|
+| NC1020 | `obj_lu.bin`, `nc1020.fls` |
+| PC1000 | `pc1000.rom`, `pc1000.nor` |
+| CC800  | `obj.bin`, `cc800.fls` |
+| NC2000 | `nc2000.nor`, `nc2000.nand`, `nc2000.nand0` |
+| NC3000 | `nc3000.nor`, `nc3000.nand` (`nc3000.nand0` optional) |
 
 Firmware dumps are copyrighted; this bundle ships none. Guest writes to
 NOR/NAND stay in the wasm filesystem and are lost when the page is reloaded.

@@ -75,7 +75,7 @@ The compiled core will be at:
    ```
 3. Copy firmware files:
    ```bash
-   adb push tmp/roms/nc1020/ /sdcard/RetroArch/system/WQXEmu/nc1020/
+   adb push tmp/system/wqxemu/nc1020/ /sdcard/RetroArch/system/wqxemu/nc1020/
    ```
 
 ## Supported Android Architectures
@@ -94,7 +94,7 @@ permissions. `/sdcard/RetroArch/` is a common manual-install location, but the
 paths shown under **Settings → Directory** are authoritative.
 
 - Place the model directories from the [firmware table](RetroArch-Core.md#firmware-file-requirements)
-  below the configured **System/BIOS** directory as `WQXEmu/<model>/`
+  below the configured **System/BIOS** directory as `wqxemu/<model>/`
 - Grant RetroArch access when Android shows the storage access framework picker
 - If external storage is not visible to RetroArch, use its app-specific directory
   or another directory selected through RetroArch itself
@@ -132,10 +132,12 @@ Rules the core follows for any Android host:
 - Saves and persistent session files go to the directory answered by
   `RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY`; the content path may be a throwaway
   copy in the app cache, so nothing is written next to it.
-- Firmware is read from the content path the frontend hands over; if that
-  cached set is unusable, the core falls back to
-  `RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY` (`WQXEmu/<model>/`). A real file
-  path is required and an in-memory buffer is ignored.
+- Firmware is always read from
+  `RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY` as `wqxemu/<model>/`, using exact
+  case-sensitive file names. The content path is optional and never used.
+- The profile sets `no_game: true` and lists the five models in
+  `boot_options`; RetroDroid stores the selection as the `wqxemu_model` core
+  option and starts the core with `retro_load_game(NULL)`.
 - Load failures are reported with `RETRO_ENVIRONMENT_SET_MESSAGE` and through
   the frontend log interface, never as a silent `false`.
 - Panics are caught at the C ABI boundary (`catch_unwind` in every exported

@@ -1619,12 +1619,13 @@ mod tests {
         assert_eq!(machine.lcd.framebuffer_raw()[0], 0x55);
     }
 
-    /// Build RomFiles from the repository-root tmp/roms/ directory, or None if
-    /// the dumps are not present (tests then skip).
+    /// Build RomFiles from the repository-root tmp/roms/wqxemu/nc3000
+    /// directory, or None if the dumps are not present (tests then skip).
     fn nc3000_rom_files() -> Option<RomFiles> {
         let base = std::env::var("WQX_ROM_DIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| std::path::PathBuf::from("tmp/roms"))
+            .join("wqxemu")
             .join("nc3000");
         let nor = base.join("nc3000.nor");
         let nand = base.join("nc3000.nand");

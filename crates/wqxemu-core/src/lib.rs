@@ -43,4 +43,3 @@ pub use keyboard::{
 };
 pub use lcd::{LCD_HEIGHT, LCD_WIDTH};
 pub use machine::{Machine, MachineModel, RomFiles};
-pub use machines::detect_model;
