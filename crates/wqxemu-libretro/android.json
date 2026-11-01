@@ -120,6 +120,7 @@
     {
       "file": "wqxemu/nc3000/nc3000.nand0",
       "required": false,
+      "optional": true,
       "hint": {
         "en": "NC3000 first NAND plane; optional, used when the dump provides it.",
         "zh": "NC3000 第一 NAND 平面；可选，有对应转储时会使用。"
