@@ -32,13 +32,13 @@ directory. `--model` (default `nc1020`) selects the folder that is read:
 <system-dir>/
 └── wqxemu/
     ├── nc1020/
-    │   ├── nc1020.rom
+    │   ├── obj_lu.bin
     │   └── nc1020.fls
     ├── pc1000/
     │   ├── pc1000.rom
     │   └── pc1000.nor
     ├── cc800/
-    │   ├── cc800.rom
+    │   ├── obj.bin
     │   └── cc800.fls
     ├── nc2000/
     │   ├── nc2000.nor
@@ -52,15 +52,15 @@ directory. `--model` (default `nc1020`) selects the folder that is read:
 
 | Model | Required files | Optional files |
 |-------|----------------|----------------|
-| NC1020 | `nc1020.rom`, `nc1020.fls` | — |
+| NC1020 | `obj_lu.bin`, `nc1020.fls` | — |
 | PC1000 | `pc1000.rom`, `pc1000.nor` | — |
-| CC800 | `cc800.rom`, `cc800.fls` | — |
+| CC800 | `obj.bin`, `cc800.fls` | — |
 | NC2000 | `nc2000.nor`, `nc2000.nand`, `nc2000.nand0` | — |
 | NC3000 | `nc3000.nor`, `nc3000.nand` | `nc3000.nand0` |
 
 The folder names and file names are compared byte-for-byte. `WQXEmu/`,
-`NC1020/` or `NC1020.ROM` are not recognized; only `wqxemu/`, `nc1020/`
-and `nc1020.rom` are. Other files in the folder are ignored.
+`NC1020/` or `OBJ_LU.BIN` are not recognized; only `wqxemu/`, `nc1020/`
+and `obj_lu.bin` are. Other files in the folder are ignored.
 
 ## Quick Start
 
@@ -206,8 +206,8 @@ wqx-emu --model nc2000 --system-dir system --state-file nc2000.wqxs
    `--system-dir` points at the folder that contains `wqxemu/`, and that the
    model folder name is lowercase and matches `--model`.
 2. **"<model> firmware is incomplete in ..."** — The message lists every
-   missing file. File names are case-sensitive; rename the dumps to the exact
-   names in the table above.
+   missing file. File names are case-sensitive; place the dumps with the
+   exact names from the table above.
 3. **"unknown model '...'"** — Use one of `nc1020`, `pc1000`, `cc800`,
    `nc2000`, `nc3000`.
 4. **"State file mismatch"** — Use a state file created with the same model

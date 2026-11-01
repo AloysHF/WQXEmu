@@ -477,9 +477,9 @@ pub struct RomFiles {
 
 | Model | ROM files | Status |
 |-------|-----------|--------|
-| `nc1020.rs` | 24MB ROM (`nc1020.rom`) + 1MB NOR (`nc1020.fls`) | Complete, boots to menu |
+| `nc1020.rs` | 24MB ROM (`obj_lu.bin`) + 1MB NOR (`nc1020.fls`) | Complete, boots to menu |
 | `pc1000.rs` | 12MB ROM (`pc1000.rom` = obj1+obj2+obj3) + 512KB NOR | Complete, boots to menu, keyboard + NOR work |
-| `cc800.rs` | 16MB ROM (`cc800.rom`) + 512KB NOR (`cc800.fls`) | Complete, boots to menu, keyboard + NOR work |
+| `cc800.rs` | 16MB ROM (`obj.bin`) + 512KB NOR (`cc800.fls`) | Complete, boots to menu, keyboard + NOR work |
 | `nc2000.rs` | NOR + NAND (`*.nor` / `*.nand`) | Boots to clock screen, standby/wake works |
 | `nc3000.rs` | 1MB NOR + ~66MB NAND (`*.nor` / `*.nand`) | Boots to clock screen, standby/wake works |
 
@@ -527,7 +527,7 @@ pub struct RomFiles {
 ### CC800
 
 - The CC800 is the older sibling of the PC1000 and shares the SPDC1016
-  SoC. Its 16MB `cc800.rom` ROM and 512KB NOR are stored with the
+  SoC. Its 16MB `obj.bin` ROM and 512KB NOR are stored with the
   half-swapped 16KB bank convention (like the NC1020) and are unswapped
   on load.
 - Bank window (0x4000-0xBFFF) page order is `{+0x0000, +0x2000, +0x4000,
@@ -670,17 +670,19 @@ its system directory:
 ```
 <system>/
 └── wqxemu/
-    └── <model>/
-        ├── <model>.rom    # NC1020, PC1000, CC800
-        ├── <model>.fls    # NC1020, CC800
-        ├── <model>.nor    # PC1000, NC2000, NC3000
-        ├── <model>.nand   # NC2000, NC3000
-        └── <model>.nand0  # NC2000 (required), NC3000 (optional)
+    ├── nc1020/{obj_lu.bin, nc1020.fls}
+    ├── cc800/{obj.bin, cc800.fls}
+    ├── pc1000/{pc1000.rom, pc1000.nor}
+    ├── nc2000/{nc2000.nor, nc2000.nand, nc2000.nand0}
+    └── nc3000/{nc3000.nor, nc3000.nand[, nc3000.nand0]}
 ```
+
+The NC1020 and CC800 system ROMs keep their historical dump names
+(`obj_lu.bin`, `obj.bin`); every other name is the one the dump already uses.
 
 `RomFiles::for_model(system_dir, model)` in `machine.rs` is the single
 resolver. It lists each model's directory entries and compares names
-byte-for-byte, so `WQXEmu/`, `NC1020/` or `NC1020.FLS` are rejected even on a
+byte-for-byte, so `WQXEmu/`, `NC1020/` or `OBJ_LU.BIN` are rejected even on a
 case-insensitive filesystem. Every missing required file is reported.
 
 - Standalone frontend: `--system-dir <DIR>` (default `system`) and

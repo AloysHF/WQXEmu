@@ -97,7 +97,7 @@ The ZIP must contain exactly one model folder below `wqxemu/`:
 nc1020.zip
   wqxemu/
     nc1020/
-      nc1020.rom
+      obj_lu.bin
       nc1020.fls
 ```
 
@@ -111,9 +111,9 @@ File names are case-sensitive and must match the table below exactly.
 
 | Model  | Required files |
 |--------|----------------|
-| NC1020 | `nc1020.rom`, `nc1020.fls` |
+| NC1020 | `obj_lu.bin`, `nc1020.fls` |
 | PC1000 | `pc1000.rom`, `pc1000.nor` |
-| CC800  | `cc800.rom`, `cc800.fls` |
+| CC800  | `obj.bin`, `cc800.fls` |
 | NC2000 | `nc2000.nor`, `nc2000.nand`, `nc2000.nand0` |
 | NC3000 | `nc3000.nor`, `nc3000.nand` (`nc3000.nand0` optional) |
 

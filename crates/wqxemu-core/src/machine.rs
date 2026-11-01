@@ -60,6 +60,17 @@ impl MachineModel {
         self.name()
     }
 
+    /// Name of the system ROM dump for this model. The NC1020 and CC800 dumps
+    /// keep their historical dump names.
+    fn rom_file_name(self) -> Option<&'static str> {
+        match self {
+            MachineModel::Nc1020 => Some("obj_lu.bin"),
+            MachineModel::Pc1000 => Some("pc1000.rom"),
+            MachineModel::Cc800 => Some("obj.bin"),
+            MachineModel::Nc2000 | MachineModel::Nc3000 => None,
+        }
+    }
+
     /// Name of the NOR Flash dump for this model. NC1020 and CC800 dumps use
     /// the historical `.fls` extension.
     fn nor_file_name(self) -> &'static str {
@@ -80,13 +91,14 @@ impl MachineModel {
 /// ```text
 /// <system>/
 /// └── wqxemu/
-///     └── <model>/
-///         ├── <model>.rom    # system ROM (NC1020, PC1000, CC800)
-///         ├── <model>.fls    # NOR Flash (NC1020, CC800)
-///         ├── <model>.nor    # NOR Flash (PC1000, NC2000, NC3000)
-///         ├── <model>.nand   # NAND Flash (NC2000, NC3000)
-///         └── <model>.nand0  # first NAND plane (NC2000; optional NC3000)
+///     ├── nc1020/{obj_lu.bin, nc1020.fls}
+///     ├── cc800/{obj.bin, cc800.fls}
+///     ├── pc1000/{pc1000.rom, pc1000.nor}
+///     ├── nc2000/{nc2000.nor, nc2000.nand, nc2000.nand0}
+///     └── nc3000/{nc3000.nor, nc3000.nand[, nc3000.nand0]}
 /// ```
+///
+/// The NC1020 and CC800 system ROMs keep their historical dump names.
 #[derive(Clone, Debug, Default)]
 pub struct RomFiles {
     pub rom: Option<PathBuf>,
@@ -164,7 +176,9 @@ impl RomFiles {
         let mut files = Self::default();
         match model {
             MachineModel::Nc1020 | MachineModel::Pc1000 | MachineModel::Cc800 => {
-                files.rom = slot(&format!("{name}.rom"), true);
+                if let Some(rom_name) = model.rom_file_name() {
+                    files.rom = slot(rom_name, true);
+                }
                 files.nor = slot(model.nor_file_name(), true);
             }
             MachineModel::Nc2000 => {
@@ -412,12 +426,12 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let nc1020 = root.path().join("wqxemu").join("nc1020");
         std::fs::create_dir_all(&nc1020).unwrap();
-        std::fs::write(nc1020.join("nc1020.rom"), b"rom").unwrap();
+        std::fs::write(nc1020.join("obj_lu.bin"), b"rom").unwrap();
         std::fs::write(nc1020.join("nc1020.fls"), b"nor").unwrap();
         std::fs::write(nc1020.join("notes.txt"), b"ignored").unwrap();
 
         let files = RomFiles::for_model(root.path(), MachineModel::Nc1020).unwrap();
-        assert_eq!(files.rom, Some(nc1020.join("nc1020.rom")));
+        assert_eq!(files.rom, Some(nc1020.join("obj_lu.bin")));
         assert_eq!(files.nor, Some(nc1020.join("nc1020.fls")));
         assert!(files.nand.is_none());
         assert!(files.nand0.is_none());
@@ -447,11 +461,11 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let nc1020 = root.path().join("wqxemu").join("nc1020");
         std::fs::create_dir_all(&nc1020).unwrap();
-        std::fs::write(nc1020.join("NC1020.ROM"), b"rom").unwrap();
+        std::fs::write(nc1020.join("OBJ_LU.BIN"), b"rom").unwrap();
         std::fs::write(nc1020.join("nc1020.fls"), b"nor").unwrap();
 
         let error = RomFiles::for_model(root.path(), MachineModel::Nc1020).unwrap_err();
-        assert!(error.to_string().contains("nc1020.rom"), "{error}");
+        assert!(error.to_string().contains("obj_lu.bin"), "{error}");
 
         let empty = tempfile::tempdir().unwrap();
         let error = RomFiles::for_model(empty.path(), MachineModel::Nc1020).unwrap_err();

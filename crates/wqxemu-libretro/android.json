@@ -30,11 +30,11 @@
   "save_state_format": 1,
   "firmware": [
     {
-      "file": "wqxemu/nc1020/nc1020.rom",
+      "file": "wqxemu/nc1020/obj_lu.bin",
       "required": true,
       "hint": {
-        "en": "NC1020 system ROM (nc1020.rom); needed when the NC1020 model is selected.",
-        "zh": "NC1020 系统 ROM（nc1020.rom）；选择 NC1020 机型时需要。"
+        "en": "NC1020 system ROM (obj_lu.bin, original dump name); needed when the NC1020 model is selected.",
+        "zh": "NC1020 系统 ROM（obj_lu.bin，保持原始转储名）；选择 NC1020 机型时需要。"
       }
     },
     {
@@ -62,11 +62,11 @@
       }
     },
     {
-      "file": "wqxemu/cc800/cc800.rom",
+      "file": "wqxemu/cc800/obj.bin",
       "required": false,
       "hint": {
-        "en": "CC800 system ROM (cc800.rom); needed when the CC800 model is selected.",
-        "zh": "CC800 系统 ROM（cc800.rom）；选择 CC800 机型时需要。"
+        "en": "CC800 system ROM (obj.bin, original dump name); needed when the CC800 model is selected.",
+        "zh": "CC800 系统 ROM（obj.bin，保持原始转储名）；选择 CC800 机型时需要。"
       }
     },
     {

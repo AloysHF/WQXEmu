@@ -55,20 +55,21 @@ Firmware lives below the system directory in a fixed, case-sensitive layout.
 tmp/system/
 └── wqxemu/
     └── nc1020/
-        ├── nc1020.rom    # system ROM
+        ├── obj_lu.bin    # system ROM
         └── nc1020.fls    # NOR Flash
 ```
 
 | Model | Files below `wqxemu/<model>/` |
 |-------|-------------------------------|
-| NC1020 | `nc1020.rom` + `nc1020.fls` |
+| NC1020 | `obj_lu.bin` + `nc1020.fls` |
 | PC1000 | `pc1000.rom` + `pc1000.nor` |
-| CC800 | `cc800.rom` + `cc800.fls` |
+| CC800 | `obj.bin` + `cc800.fls` |
 | NC2000 | `nc2000.nor` + `nc2000.nand` + `nc2000.nand0` |
 | NC3000 | `nc3000.nor` + `nc3000.nand` (+ optional `nc3000.nand0`) |
 
 The folder name must match `--model` exactly, and the file names are matched
-byte-for-byte. Rename existing dumps once to this scheme.
+byte-for-byte. Existing dumps keep their original names; only the folder
+layout has to be reorganized.
 
 See the [Standalone Emulator](docs/Standalone-Emulator.md) guide for installation, keyboard controls, headless mode, screenshots, and all command-line options.
 
@@ -94,7 +95,7 @@ The ZIP carries the dumps of exactly one model inside its model folder:
 nc1020.zip
   wqxemu/
     nc1020/
-      nc1020.rom
+      obj_lu.bin
       nc1020.fls
 ```
 

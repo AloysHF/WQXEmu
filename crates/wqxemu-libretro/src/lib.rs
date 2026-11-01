@@ -1118,9 +1118,9 @@ mod tests {
     fn resolves_the_fixed_firmware_set_for_each_model() {
         let system_dir = tempfile::tempdir().unwrap();
         let canonical = [
-            (MachineModel::Nc1020, &["nc1020.rom", "nc1020.fls"][..]),
+            (MachineModel::Nc1020, &["obj_lu.bin", "nc1020.fls"][..]),
             (MachineModel::Pc1000, &["pc1000.rom", "pc1000.nor"][..]),
-            (MachineModel::Cc800, &["cc800.rom", "cc800.fls"][..]),
+            (MachineModel::Cc800, &["obj.bin", "cc800.fls"][..]),
             (
                 MachineModel::Nc2000,
                 &["nc2000.nor", "nc2000.nand", "nc2000.nand0"][..],
@@ -1159,7 +1159,7 @@ mod tests {
         let system_dir = tempfile::tempdir().unwrap();
         let wrong_root = system_dir.path().join("WQXEmu").join("nc1020");
         std::fs::create_dir_all(&wrong_root).unwrap();
-        std::fs::write(wrong_root.join("nc1020.rom"), b"dump").unwrap();
+        std::fs::write(wrong_root.join("obj_lu.bin"), b"dump").unwrap();
         std::fs::write(wrong_root.join("nc1020.fls"), b"dump").unwrap();
         let error = RomFiles::for_model(system_dir.path(), MachineModel::Nc1020).unwrap_err();
         assert!(
@@ -1171,10 +1171,10 @@ mod tests {
         let system_dir = tempfile::tempdir().unwrap();
         let model_dir = system_dir.path().join(FIRMWARE_ROOT).join("nc1020");
         std::fs::create_dir_all(&model_dir).unwrap();
-        std::fs::write(model_dir.join("NC1020.ROM"), b"dump").unwrap();
+        std::fs::write(model_dir.join("OBJ_LU.BIN"), b"dump").unwrap();
         std::fs::write(model_dir.join("nc1020.fls"), b"dump").unwrap();
         let error = RomFiles::for_model(system_dir.path(), MachineModel::Nc1020).unwrap_err();
-        assert!(error.to_string().contains("nc1020.rom"), "{error}");
+        assert!(error.to_string().contains("obj_lu.bin"), "{error}");
     }
 
     #[test]
