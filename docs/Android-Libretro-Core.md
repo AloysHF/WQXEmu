@@ -138,6 +138,9 @@ Rules the core follows for any Android host:
 - The profile sets `no_game: true` and lists the five models in
   `boot_options`; RetroDroid stores the selection as the `wqxemu_model` core
   option and starts the core with `retro_load_game(NULL)`.
+- `wqxemu/nc3000/nc3000.nand0` is marked `optional: true` in the profile, so a
+  host can tell that the NC3000 boots without it. Every other dump the selected
+  model reads is listed without that flag; the NC2000 needs both NAND planes.
 - Load failures are reported with `RETRO_ENVIRONMENT_SET_MESSAGE` and through
   the frontend log interface, never as a silent `false`.
 - Panics are caught at the C ABI boundary (`catch_unwind` in every exported
