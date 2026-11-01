@@ -450,7 +450,7 @@ Real-Time Clock registers.
 `Machine` is the trait a model must implement:
 
 - `model()` / `MachineModel` — stable model identifier
-  (`nc1020`, `pc1000`, `nc2000`)
+  (`nc1020`, `pc1000`, `cc800`, `nc2000`, `nc3000`)
 - `load_rom(&RomFiles)` — load ROM / NOR / NAND dumps
 - `reset()` / `step(&mut Cpu)` — reset and execute one instruction
 - `end_of_frame(&mut Cpu)` — per-frame LCD copy and wake-up handling
@@ -461,7 +461,8 @@ Real-Time Clock registers.
   model-specific state used for cross-process sessions
 - `load_nor()` / `save_nor()` / `set_speed_up()` — optional overrides
 
-`RomFiles` carries the file paths for each storage device:
+`RomFiles` carries the file paths for each storage device; the frontends
+obtain it from `RomFiles::for_model`, which resolves the fixed layout:
 
 ```rust
 pub struct RomFiles {
@@ -476,9 +477,9 @@ pub struct RomFiles {
 
 | Model | ROM files | Status |
 |-------|-----------|--------|
-| `nc1020.rs` | 24MB ROM (`obj_lu.bin`) + 1MB NOR | Complete, boots to menu |
+| `nc1020.rs` | 24MB ROM (`nc1020.rom`) + 1MB NOR (`nc1020.fls`) | Complete, boots to menu |
 | `pc1000.rs` | 12MB ROM (`pc1000.rom` = obj1+obj2+obj3) + 512KB NOR | Complete, boots to menu, keyboard + NOR work |
-| `cc800.rs` | 16MB ROM (`obj.bin`) + 512KB NOR | Complete, boots to menu, keyboard + NOR work |
+| `cc800.rs` | 16MB ROM (`cc800.rom`) + 512KB NOR (`cc800.fls`) | Complete, boots to menu, keyboard + NOR work |
 | `nc2000.rs` | NOR + NAND (`*.nor` / `*.nand`) | Boots to clock screen, standby/wake works |
 | `nc3000.rs` | 1MB NOR + ~66MB NAND (`*.nor` / `*.nand`) | Boots to clock screen, standby/wake works |
 
@@ -526,7 +527,7 @@ pub struct RomFiles {
 ### CC800
 
 - The CC800 is the older sibling of the PC1000 and shares the SPDC1016
-  SoC. Its 16MB `obj.bin` ROM and 512KB NOR are stored with the
+  SoC. Its 16MB `cc800.rom` ROM and 512KB NOR are stored with the
   half-swapped 16KB bank convention (like the NC1020) and are unswapped
   on load.
 - Bank window (0x4000-0xBFFF) page order is `{+0x0000, +0x2000, +0x4000,
@@ -661,17 +662,39 @@ frontend manages it automatically under the frontend save directory as
 firmware set, which remains read-only. Persistent sessions are separate from
 libretro's compact manual Save State API.
 
-## Model selection
+## Firmware layout and model selection
 
-- Standalone frontend: `--model nc1020|pc1000|cc800|nc2000|nc3000`, or
-  auto-detection via `detect_model(&files)` (NAND > 60MB or 1MB NOR →
-  NC3000; NAND present → NC2000; 24MB ROM → NC1020; 12MB ROM → PC1000;
-  16MB ROM with a volume-1 boot page at 8MB → CC800; otherwise NC1020
-  default).
-- Libretro frontend: reads the `wqxemu_model` core option (NC1020 by default),
-  resolves that model's canonical files under the frontend system directory at
-  `WQXEmu/<model>/`, and starts without content. Firmware passed as content is
-  rejected; model auto-detection is not used in this frontend.
+Every frontend resolves firmware from one fixed, case-sensitive layout below
+its system directory:
+
+```
+<system>/
+└── wqxemu/
+    └── <model>/
+        ├── <model>.rom    # NC1020, PC1000, CC800
+        ├── <model>.fls    # NC1020, CC800
+        ├── <model>.nor    # PC1000, NC2000, NC3000
+        ├── <model>.nand   # NC2000, NC3000
+        └── <model>.nand0  # NC2000 (required), NC3000 (optional)
+```
+
+`RomFiles::for_model(system_dir, model)` in `machine.rs` is the single
+resolver. It lists each model's directory entries and compares names
+byte-for-byte, so `WQXEmu/`, `NC1020/` or `NC1020.FLS` are rejected even on a
+case-insensitive filesystem. Every missing required file is reported.
+
+- Standalone frontend: `--system-dir <DIR>` (default `system`) and
+  `--model nc1020|pc1000|cc800|nc2000|nc3000` (default `nc1020`).
+- Libretro frontend: reads the `wqxemu_model` core option, resolves that
+  model's files under the frontend system directory, and starts without
+  content. The core accepts `retro_load_game(NULL)` and ignores any content
+  path the frontend passes.
+- EmulatorJS: extracts the firmware ZIP into the wasm filesystem root and
+  treats `/` as the system directory. The archive must contain exactly one
+  model folder under `wqxemu/`; that folder selects the model. Zero or several
+  model folders are rejected rather than guessed.
+
+There is no auto-detection from dump sizes or file names in any frontend.
 
 ## Keyboard layouts (`keyboard.rs`)
 
@@ -691,6 +714,5 @@ pointer sources before updating the same highlight and emulated matrix state.
 1. Add a variant to `MachineModel` in `machine.rs`.
 2. Create `machines/<model>.rs` implementing `Machine`.
 3. Register it in `machines::create_machine`.
-4. Extend `detect_model` if the ROM files allow auto-detection.
-5. Add the libretro core option value and canonical system-firmware mapping.
-6. Update the frontend documentation, CLI help, and core-info firmware metadata.
+4. Add the model to `from_name`, the `wqxemu_model` core option values, and the fixed file names in `RomFiles::for_model`.
+5. Update the frontend documentation, CLI help, and core-info firmware metadata.

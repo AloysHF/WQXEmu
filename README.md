@@ -40,7 +40,7 @@ A Wenquxing (文曲星) electronic dictionary emulator written in Rust, using Lo
 Download the latest binary from the [Releases](https://github.com/AloysHF/WQXEmu/releases) page and run:
 
 ```bash
-wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020
+wqx-emu --model nc1020 --system-dir tmp/system
 ```
 
 The code-drawn skin is used by default. Pass `--skin image` to use the
@@ -48,25 +48,37 @@ original model photograph instead, retaining the same LCD placement and
 clickable key geometry. Pass `--dump-skin out.png` to export the selected
 skin bitmap to a PNG file.
 
-Point `--rom-dir` at a directory containing the firmware dumps for one device; files are discovered by extension (`.rom`/`.bin` for the system ROM, `.fls`/`.nor` for NOR Flash, `.nand` and `.nand0` for NAND). The required combination depends on the selected model.
+Firmware lives below the system directory in a fixed, case-sensitive layout.
+`--model` selects the folder read by the emulator:
 
-| Model | Required firmware | Optional firmware |
-|-------|-------------------|-------------------|
-| NC1020 | ROM + NOR | — |
-| PC1000 | ROM + NOR | — |
-| CC800 | ROM + NOR | — |
-| NC2000 | NOR + NAND + NAND0 | — |
-| NC3000 | NOR + NAND | NAND0 |
+```
+tmp/system/
+└── wqxemu/
+    └── nc1020/
+        ├── nc1020.rom    # system ROM
+        └── nc1020.fls    # NOR Flash
+```
+
+| Model | Files below `wqxemu/<model>/` |
+|-------|-------------------------------|
+| NC1020 | `nc1020.rom` + `nc1020.fls` |
+| PC1000 | `pc1000.rom` + `pc1000.nor` |
+| CC800 | `cc800.rom` + `cc800.fls` |
+| NC2000 | `nc2000.nor` + `nc2000.nand` + `nc2000.nand0` |
+| NC3000 | `nc3000.nor` + `nc3000.nand` (+ optional `nc3000.nand0`) |
+
+The folder name must match `--model` exactly, and the file names are matched
+byte-for-byte. Rename existing dumps once to this scheme.
 
 See the [Standalone Emulator](docs/Standalone-Emulator.md) guide for installation, keyboard controls, headless mode, screenshots, and all command-line options.
 
 ### RetroArch Mode
 
-Install the core, place the firmware set under RetroArch's `system/WQXEmu/<model>/`
-directory (files are discovered by the same extension rules as `--rom-dir`), select
-the machine in **Core Options**, and use **Start Core**. Firmware
-is system data rather than game content, so the core intentionally does not accept
-files through **Load Content**.
+Install the core, place each model's firmware under RetroArch's
+`system/wqxemu/<model>/` directory using the same file names, select the
+machine in **Core Options**, and use **Start Core**. Firmware is system data
+rather than game content, so the core intentionally does not accept files
+through **Load Content**.
 
 See the [RetroArch Core](docs/RetroArch-Core.md) guide for installation, supported platforms, RetroPad mapping, and features.
 
@@ -76,19 +88,20 @@ Open <https://AloysHF.github.io/WQXEmu/play.html> and select a firmware ZIP.
 The page runs the WebAssembly core locally; nothing is uploaded and no firmware
 is hosted on the site.
 
-The ZIP carries the dumps for one model, optionally inside a folder named after
-it (`nc1020`, `pc1000`, `cc800`, `nc2000`, `nc3000`):
+The ZIP carries the dumps of exactly one model inside its model folder:
 
 ```
 nc1020.zip
-  nc1020/
-    obj_lu.bin    # system ROM (.rom / .bin)
-    nc1020.fls    # NOR Flash (.fls / .nor)
+  wqxemu/
+    nc1020/
+      nc1020.rom
+      nc1020.fls
 ```
 
-The required dump set matches standalone mode. Without a recognized folder
-name the core auto-detects the model from the dumps. Self-hosting instructions
-and the full archive rules are in the
+EmulatorJS extracts the archive at the root of the wasm filesystem, so the
+`wqxemu/<model>/` path in the ZIP becomes the system directory layout. An
+archive with zero or several model folders is rejected instead of guessed.
+Self-hosting instructions and the full archive rules are in the
 [EmulatorJS Core](docs/EmulatorJS-Core.md) guide.
 
 ## Building
@@ -99,7 +112,7 @@ Requires [Rust](https://www.rust-lang.org/tools/install) (stable).
 
 ```bash
 cargo build --release
-cargo run -p wqxemu --release -- --model nc1020 --rom-dir tmp/roms/nc1020
+cargo run -p wqxemu --release -- --model nc1020 --system-dir system
 ```
 
 The binary is produced at `target/release/wqx-emu` (or `wqx-emu.exe` on Windows).

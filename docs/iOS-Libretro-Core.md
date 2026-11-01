@@ -68,7 +68,7 @@ under **On My iPhone/iPad → RetroArch**, or Finder file sharing, to transfer t
 firmware. Check **Settings → Directory → System/BIOS** inside RetroArch rather than
 assuming a fixed filesystem path.
 
-Create the `WQXEmu/<model>/` hierarchy from the
+Create the `wqxemu/<model>/` hierarchy from the
 [common firmware guide](RetroArch-Core.md#firmware-file-placement) inside that
 configured system directory. Firmware and save data remain inside RetroArch's app
 sandbox unless exported through Files or Finder.

@@ -1,6 +1,7 @@
 # Standalone Emulator
 
-This guide covers the standalone WQXEmu desktop application, including installation, keyboard controls, headless mode, screenshots, and all command-line options.
+This guide covers the standalone WQXEmu desktop application: firmware layout,
+command-line options, keyboard controls, screenshots and persistent sessions.
 
 ## Installation
 
@@ -22,75 +23,83 @@ cargo build --release
 
 The binary will be at `target/release/wqx-emu` (or `wqx-emu.exe` on Windows).
 
-## Quick Start
+## Firmware Layout
 
-### Basic Usage
+Every frontend reads the same fixed, case-sensitive layout below the system
+directory. `--model` (default `nc1020`) selects the folder that is read:
 
-```bash
-wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020
+```
+<system-dir>/
+└── wqxemu/
+    ├── nc1020/
+    │   ├── nc1020.rom
+    │   └── nc1020.fls
+    ├── pc1000/
+    │   ├── pc1000.rom
+    │   └── pc1000.nor
+    ├── cc800/
+    │   ├── cc800.rom
+    │   └── cc800.fls
+    ├── nc2000/
+    │   ├── nc2000.nor
+    │   ├── nc2000.nand
+    │   └── nc2000.nand0
+    └── nc3000/
+        ├── nc3000.nor
+        ├── nc3000.nand
+        └── nc3000.nand0    # optional
 ```
 
-### Supported Models
+| Model | Required files | Optional files |
+|-------|----------------|----------------|
+| NC1020 | `nc1020.rom`, `nc1020.fls` | — |
+| PC1000 | `pc1000.rom`, `pc1000.nor` | — |
+| CC800 | `cc800.rom`, `cc800.fls` | — |
+| NC2000 | `nc2000.nor`, `nc2000.nand`, `nc2000.nand0` | — |
+| NC3000 | `nc3000.nor`, `nc3000.nand` | `nc3000.nand0` |
 
-| Model | Required firmware | Optional firmware |
-|-------|-------------------|-------------------|
-| NC1020 | ROM + NOR | — |
-| PC1000 | ROM + NOR | — |
-| CC800 | ROM + NOR | — |
-| NC2000 | NOR + NAND + NAND0 | — |
-| NC3000 | NOR + NAND | NAND0 |
+The folder names and file names are compared byte-for-byte. `WQXEmu/`,
+`NC1020/` or `NC1020.ROM` are not recognized; only `wqxemu/`, `nc1020/`
+and `nc1020.rom` are. Other files in the folder are ignored.
 
-### Firmware Files
+## Quick Start
 
-Point `--rom-dir` at a directory containing the firmware dumps for one device.
-Files are discovered by extension (case-insensitive); any other files are
-ignored:
+```bash
+wqx-emu --model nc1020 --system-dir system
+```
 
-- `.rom` / `.bin` — System ROM (NC1020, PC1000, CC800)
-- `.fls` / `.nor` — NOR Flash dump
-- `.nand` — NAND Flash dump (NC2000, NC3000)
-- `.nand0` — First NAND plane dump (NC2000, NC3000)
-
-The required combination depends on the selected model (see the table above).
+The code-drawn skin is used by default.
 
 ## Command-Line Options
 
 ### Usage
 
 ```bash
-wqx-emu [OPTIONS] [COMMAND]
+wqx-emu [OPTIONS]
 ```
 
-### Model Selection
+### Model and Firmware
 
-- `--model <MODEL>` — Select the model to emulate
-  - `nc1020` (default)
-  - `pc1000`
-  - `cc800`
-  - `nc2000`
-  - `nc3000`
-
-### Firmware Files
-
-- `--rom-dir <DIR>` — Directory containing the firmware dumps for one device
-  (required). Files are discovered by extension: `.rom`/`.bin` (system ROM),
-  `.fls`/`.nor` (NOR Flash), `.nand` (NAND Flash), `.nand0` (first NAND plane)
+- `--model <MODEL>` — Model to emulate (default: `nc1020`)
+  - One of `nc1020`, `pc1000`, `cc800`, `nc2000`, `nc3000`
+  - Selects `<system-dir>/wqxemu/<MODEL>/`
+- `--system-dir <DIR>` — Root that contains the `wqxemu/` folder (default: `system`)
 
 ### Display Options
 
-- `--scale <N>` — Window scale factor (default: 4)
-  - Range: 1-8
+- `-s, --scale <N>` — Window scale factor (default: 4)
 - `--skin <MODE>` — Device skin renderer (default: `code`)
   - `image` uses the original embedded model image
   - `code` draws the shell, controls, labels, speaker, and keyboard without reading a skin image
 - `--dump-skin <PATH>` — Export the selected skin bitmap to a PNG file and exit
   - Honors `--model`, `--scale`, and `--skin`; useful for previewing or comparing skins
-- `--fullscreen` — Start in fullscreen mode
+- `-S, --screenshot <PATH>` — Run some frames, save a PNG screenshot and exit
+- `--screenshot-frames <N>` — Frames to run before the screenshot (default: 30)
 
 For example, start the NC1020 with the original photograph-like image skin:
 
 ```bash
-wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020 --skin image
+wqx-emu --model nc1020 --system-dir system --skin image
 ```
 
 Both modes use the same LCD rectangle and clickable key geometry. The image
@@ -99,34 +108,9 @@ the device layout with model-specific colors and raster-drawn controls.
 
 ### State Management
 
-- `--state-file <PATH>` — Path to save/load compressed session state
+- `--state-file <PATH>` — Path to save/load a compressed session state
   - Creates a gzip-compressed session state file
-  - Restores state on subsequent runs
-
-### Headless Mode
-
-- `--headless` — Run without a window
-  - Useful for testing and batch processing
-- `--frames <N>` — Run for N frames and exit
-  - Only works with `--headless`
-- `--screenshot <PATH>` — Save screenshot to file
-  - Only works with `--headless`
-
-### Audio Options
-
-- `--no-audio` — Disable audio output
-  - Useful for headless mode or testing
-
-### Debug Options
-
-- `--debug` — Enable debug logging
-  - Shows detailed information about emulator operation
-- `--trace-cpu` — Enable CPU instruction tracing
-  - Shows each CPU instruction executed
-- `--trace-io` — Enable IO register tracing
-  - Shows IO register reads and writes
-- `--trace-bank` — Enable bank switching tracing
-  - Shows bank switch operations
+  - Restores the state on subsequent runs
 
 ### Help
 
@@ -145,27 +129,15 @@ and model-specific mapping.
 Escape operates the Wenquxing Escape/Back key. Close the window or use the
 operating system's standard close shortcut to exit the emulator.
 
-## Headless Mode
-
-Headless mode runs the emulator without a window, useful for testing and batch processing.
-
-### Basic Headless Usage
+## Screenshots
 
 ```bash
-wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020 --headless --frames 300
+wqx-emu --model nc1020 --screenshot nc1020.png --screenshot-frames 300
 ```
 
-### Taking Screenshots
-
-```bash
-wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020 --screenshot screenshot.png --frames 300
-```
-
-### Run Headless Without Audio
-
-```bash
-wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020 --headless --no-audio
-```
+The emulator runs without opening a window, saves the LCD frame to the PNG
+path and exits. `--screenshot-frames` controls how long the firmware runs
+before the capture.
 
 ## Persistent Sessions
 
@@ -174,7 +146,7 @@ The `--state-file` option enables persistent sessions that save and restore emul
 ### First Run
 
 ```bash
-wqx-emu --model nc2000 --rom-dir tmp/roms/nc2000 --state-file nc2000.wqxs
+wqx-emu --model nc2000 --system-dir system --state-file nc2000.wqxs
 ```
 
 On exit, the emulator saves a compressed session state to `nc2000.wqxs`.
@@ -182,72 +154,41 @@ On exit, the emulator saves a compressed session state to `nc2000.wqxs`.
 ### Subsequent Runs
 
 ```bash
-wqx-emu --model nc2000 --state-file nc2000.wqxs
+wqx-emu --model nc2000 --system-dir system --state-file nc2000.wqxs
 ```
 
-The emulator restores the saved state without re-running first-boot recovery.
+The emulator restores the saved state.
 
 ### Important Notes
 
 - Use a separate state file for each machine and firmware configuration
 - States from another model are rejected
-- ROM, NOR, NAND, and NAND0 source dumps remain read-only
+- ROM, NOR, NAND, and NAND0 source dumps remain read-only and are never overwritten
+- The state file must not point at one of the source dumps
 
 ## Examples
 
-### Basic Usage
-
 ```bash
 # NC1020 with ROM and NOR
-wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020
+wqx-emu --model nc1020 --system-dir system
 
 # PC1000 with ROM and NOR
-wqx-emu --model pc1000 --rom-dir tmp/roms/pc1000
+wqx-emu --model pc1000 --system-dir system
 
 # CC800 with ROM and NOR
-wqx-emu --model cc800 --rom-dir tmp/roms/cc800
+wqx-emu --model cc800 --system-dir system
 
 # NC2000 with NOR, NAND, and NAND0
-wqx-emu --model nc2000 --rom-dir tmp/roms/nc2000
+wqx-emu --model nc2000 --system-dir system
 
-# NC3000 with NOR and NAND
-wqx-emu --model nc3000 --rom-dir tmp/roms/nc3000
-```
+# NC3000 with NOR and NAND (NAND0 optional)
+wqx-emu --model nc3000 --system-dir system
 
-### Display Options
+# 2x scale, original image skin
+wqx-emu --model nc1020 --system-dir system --scale 2 --skin image
 
-```bash
-# 2x scale
-wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020 --scale 2
-
-# Fullscreen mode
-wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020 --fullscreen
-```
-
-### State Management
-
-```bash
-# First run with state file
-wqx-emu --model nc2000 --rom-dir tmp/roms/nc2000 --state-file nc2000.wqxs
-
-# Subsequent runs (firmware files are not needed)
-wqx-emu --model nc2000 --state-file nc2000.wqxs
-```
-
-### Debug Options
-
-```bash
-# Enable debug logging
-RUST_LOG=wqxemu=debug wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020
-
-# Enable CPU tracing
-wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020 --trace-cpu
-
-# Enable IO tracing
-wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020 --trace-io
-
-# Enable bank switching tracing
-wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020 --trace-bank
+# Persistent session
+wqx-emu --model nc2000 --system-dir system --state-file nc2000.wqxs
 ```
 
 ## Environment Variables
@@ -255,38 +196,33 @@ wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020 --trace-bank
 - `RUST_LOG` — Set logging level
   - `wqxemu=debug` — Enable debug logging
   - `wqxemu=trace` — Enable trace logging
-  - `wqxemu=info` — Enable info logging (default)
+  - `wqxemu=info` — Enable info logging
   - `wqxemu=warn` — Enable warning logging
   - `wqxemu=error` — Enable error logging
 
 ## Troubleshooting
 
-### Common Issues
+1. **"Firmware directory not found: .../wqxemu/<model>"** — Check that
+   `--system-dir` points at the folder that contains `wqxemu/`, and that the
+   model folder name is lowercase and matches `--model`.
+2. **"<model> firmware is incomplete in ..."** — The message lists every
+   missing file. File names are case-sensitive; rename the dumps to the exact
+   names in the table above.
+3. **"unknown model '...'"** — Use one of `nc1020`, `pc1000`, `cc800`,
+   `nc2000`, `nc3000`.
+4. **"State file mismatch"** — Use a state file created with the same model
+   and firmware.
 
-1. **"Firmware directory not found" / "No firmware dumps found"** — Ensure `--rom-dir` points at the directory holding the dumps
-2. **"Invalid model"** — Check the `--model` parameter
-3. **"State file mismatch"** — Use a state file created with the same model and firmware
-
-### Debug Logging
-
-Enable debug logging to see detailed information:
-
-```bash
-RUST_LOG=wqxemu=debug wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020
-```
-
-### CPU Tracing
-
-Trace CPU instructions for debugging:
+Enable debug logging to see more detail:
 
 ```bash
-wqx-emu --model nc1020 --rom-dir tmp/roms/nc1020 --trace-cpu
+RUST_LOG=wqxemu=debug wqx-emu --model nc1020 --system-dir system
 ```
 
 ## Notes
 
-1. **Firmware files are required** — The emulator cannot run without firmware files
-2. **State files are optional** — You can run without a state file
-3. **Headless mode is for testing** — Use `--headless` for automated testing
-4. **Debug options are verbose** — Use with caution in production
-5. **Scale factor affects performance** — Higher scale factors may be slower
+1. **Firmware files are required** — The emulator cannot run without the
+   complete set for the selected model.
+2. **State files are optional** — You can run without a state file or never
+   create one.
+3. **Scale factor affects performance** — Higher scale factors may be slower.

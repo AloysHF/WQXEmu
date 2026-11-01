@@ -2,7 +2,7 @@
 //
 // This is a simple desktop application that runs the emulator in a
 // window with keyboard input support. The target model is selected with
-// `--model` or auto-detected from the ROM files.
+// `--model` and its firmware is read from the fixed system directory layout.
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -14,8 +14,8 @@ use std::path::{Path, PathBuf};
 use wqxemu_core::key_id_for_host_key;
 use wqxemu_core::save::{read_persistent_state_file, write_persistent_state_file};
 use wqxemu_core::{
-    detect_model, layout_for, Emulator, FrontendInputState, HostKey, MachineModel, RomFiles,
-    LCD_HEIGHT, LCD_WIDTH,
+    layout_for, Emulator, FrontendInputState, HostKey, MachineModel, RomFiles, LCD_HEIGHT,
+    LCD_WIDTH,
 };
 
 mod keypad;
@@ -25,13 +25,9 @@ use keypad::{DeviceSkin, SkinInput, SkinMode};
 #[derive(Parser)]
 #[command(name = "wqxemu", version, about)]
 struct Args {
-    /// Directory containing the firmware dumps for one device
-    #[arg(
-        long,
-        value_name = "DIR",
-        help = "Directory with the firmware dumps (discovers *.rom/*.bin, *.fls/*.nor, *.nand, *.nand0)"
-    )]
-    rom_dir: PathBuf,
+    /// Directory that contains the wqxemu/<model>/ firmware folders
+    #[arg(long, value_name = "DIR", default_value = "system")]
+    system_dir: PathBuf,
 
     /// Load this persistent session if it exists and atomically update it on exit
     #[arg(
@@ -41,9 +37,9 @@ struct Args {
     )]
     state_file: Option<PathBuf>,
 
-    /// Hardware model: nc1020, pc1000, cc800, nc2000 or nc3000 (default: auto-detect)
-    #[arg(long, help = "Hardware model (nc1020, pc1000, cc800, nc2000, nc3000)")]
-    model: Option<String>,
+    /// Hardware model: nc1020, pc1000, cc800, nc2000 or nc3000
+    #[arg(long, default_value = "nc1020")]
+    model: String,
 
     /// Scale factor for the device skin (4 = 600 pixels high)
     #[arg(
@@ -241,13 +237,15 @@ fn main() -> Result<()> {
 
     let args = Args::parse();
 
-    // Discover the firmware files and pick the model
-    let files = RomFiles::from_dir(&args.rom_dir)?;
-    let model = match &args.model {
-        Some(name) => MachineModel::from_name(name)
-            .ok_or_else(|| anyhow::anyhow!("unknown model: {}", name))?,
-        None => detect_model(&files),
-    };
+    // Resolve the firmware set for the selected model
+    let model = MachineModel::from_name(&args.model).ok_or_else(|| {
+        anyhow::anyhow!(
+            "unknown model '{}': expected nc1020, pc1000, cc800, nc2000 or nc3000",
+            args.model
+        )
+    })?;
+    let files = RomFiles::for_model(&args.system_dir, model)
+        .with_context(|| format!("Failed to load {} firmware", model.name()))?;
     log::info!("Selected model: {}", model.name());
 
     // If skin dump mode, export the skin bitmap and exit without emulating.
@@ -258,7 +256,6 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    files.validate_for_model(model)?;
     validate_state_file_path(args.state_file.as_deref(), &files)?;
 
     // Create emulator
@@ -399,26 +396,33 @@ mod tests {
     use wqxemu_core::{key_ids, MachineModel, RomFiles};
 
     #[test]
-    fn rom_dir_points_at_the_firmware_directory() {
-        let args = Args::try_parse_from(["wqxemu", "--rom-dir", "tmp/roms/nc1020"]).unwrap();
-        assert_eq!(args.rom_dir, PathBuf::from("tmp/roms/nc1020"));
+    fn system_dir_and_model_have_fixed_defaults() {
+        let args = Args::try_parse_from(["wqxemu"]).unwrap();
+        assert_eq!(args.system_dir, PathBuf::from("system"));
+        assert_eq!(args.model, "nc1020");
 
-        assert!(Args::try_parse_from(["wqxemu"]).is_err());
+        let args =
+            Args::try_parse_from(["wqxemu", "--system-dir", "tmp/system", "--model", "nc3000"])
+                .unwrap();
+        assert_eq!(args.system_dir, PathBuf::from("tmp/system"));
+        assert_eq!(args.model, "nc3000");
     }
 
     #[test]
     fn firmware_file_options_are_rejected() {
         assert!(
-            Args::try_parse_from(["wqxemu", "--rom-dir", "roms", "--rom", "system.bin"]).is_err()
+            Args::try_parse_from(["wqxemu", "--system-dir", "roms", "--rom", "system.bin"])
+                .is_err()
         );
         assert!(
-            Args::try_parse_from(["wqxemu", "--rom-dir", "roms", "--nor", "flash.nor"]).is_err()
+            Args::try_parse_from(["wqxemu", "--system-dir", "roms", "--nor", "flash.nor"]).is_err()
         );
         assert!(
-            Args::try_parse_from(["wqxemu", "--rom-dir", "roms", "--nand", "flash.nand"]).is_err()
+            Args::try_parse_from(["wqxemu", "--system-dir", "roms", "--nand", "flash.nand"])
+                .is_err()
         );
         assert!(
-            Args::try_parse_from(["wqxemu", "--rom-dir", "roms", "--nand0", "flash.nand0"])
+            Args::try_parse_from(["wqxemu", "--system-dir", "roms", "--nand0", "flash.nand0"])
                 .is_err()
         );
         assert!(Args::try_parse_from(["wqxemu", "system.bin"]).is_err());
@@ -426,35 +430,29 @@ mod tests {
 
     #[test]
     fn persistent_state_file_is_opt_in_and_accepts_any_path() {
-        let default_args = Args::try_parse_from(["wqxemu", "--rom-dir", "roms"]).unwrap();
+        let default_args = Args::try_parse_from(["wqxemu"]).unwrap();
         assert!(default_args.state_file.is_none());
 
-        let enabled_args =
-            Args::try_parse_from(["wqxemu", "--rom-dir", "roms", "--state-file", "device.wqxs"])
-                .unwrap();
+        let enabled_args = Args::try_parse_from(["wqxemu", "--state-file", "device.wqxs"]).unwrap();
         assert_eq!(enabled_args.state_file, Some(PathBuf::from("device.wqxs")));
     }
 
     #[test]
     fn skin_mode_defaults_to_code_and_accepts_image() {
-        let default_args = Args::try_parse_from(["wqxemu", "--rom-dir", "roms"]).unwrap();
+        let default_args = Args::try_parse_from(["wqxemu"]).unwrap();
         assert_eq!(default_args.skin, SkinMode::Code);
 
-        let image_args =
-            Args::try_parse_from(["wqxemu", "--rom-dir", "roms", "--skin", "image"]).unwrap();
+        let image_args = Args::try_parse_from(["wqxemu", "--skin", "image"]).unwrap();
         assert_eq!(image_args.skin, SkinMode::Image);
-        assert!(
-            Args::try_parse_from(["wqxemu", "--rom-dir", "roms", "--skin", "unknown"]).is_err()
-        );
+        assert!(Args::try_parse_from(["wqxemu", "--skin", "unknown"]).is_err());
     }
 
     #[test]
     fn dump_skin_takes_an_output_path() {
-        let args = Args::try_parse_from(["wqxemu", "--rom-dir", "roms", "--dump-skin", "skin.png"])
-            .unwrap();
+        let args = Args::try_parse_from(["wqxemu", "--dump-skin", "skin.png"]).unwrap();
         assert_eq!(args.dump_skin.as_deref(), Some("skin.png"));
 
-        let default_args = Args::try_parse_from(["wqxemu", "--rom-dir", "roms"]).unwrap();
+        let default_args = Args::try_parse_from(["wqxemu"]).unwrap();
         assert!(default_args.dump_skin.is_none());
     }
 

@@ -9,26 +9,36 @@
   },
   "short_name": "WQX",
   "manufacturer": "Wenquxing",
-  "supported_extensions": [
-    "rom",
-    "bin",
-    "fls",
-    "nor",
-    "nand",
-    "nand0"
+  "supported_extensions": [],
+  "no_game": true,
+  "boot_options": [
+    {
+      "key": "wqxemu_model",
+      "label": {
+        "en": "Machine Model",
+        "zh": "机型"
+      },
+      "values": [
+        "nc1020",
+        "pc1000",
+        "cc800",
+        "nc2000",
+        "nc3000"
+      ]
+    }
   ],
   "save_state_format": 1,
   "firmware": [
     {
-      "file": "WQXEmu/nc1020/obj_lu.bin",
+      "file": "wqxemu/nc1020/nc1020.rom",
       "required": true,
       "hint": {
-        "en": "NC1020 system ROM (obj_lu.bin); needed when the NC1020 model is selected.",
-        "zh": "NC1020 系统 ROM（obj_lu.bin）；选择 NC1020 机型时需要。"
+        "en": "NC1020 system ROM (nc1020.rom); needed when the NC1020 model is selected.",
+        "zh": "NC1020 系统 ROM（nc1020.rom）；选择 NC1020 机型时需要。"
       }
     },
     {
-      "file": "WQXEmu/nc1020/nc1020.fls",
+      "file": "wqxemu/nc1020/nc1020.fls",
       "required": true,
       "hint": {
         "en": "NC1020 NOR Flash dump; needed when the NC1020 model is selected.",
@@ -36,7 +46,7 @@
       }
     },
     {
-      "file": "WQXEmu/pc1000/pc1000.rom",
+      "file": "wqxemu/pc1000/pc1000.rom",
       "required": false,
       "hint": {
         "en": "PC1000 system ROM dump; needed when the PC1000 model is selected.",
@@ -44,7 +54,7 @@
       }
     },
     {
-      "file": "WQXEmu/pc1000/pc1000.nor",
+      "file": "wqxemu/pc1000/pc1000.nor",
       "required": false,
       "hint": {
         "en": "PC1000 NOR Flash dump; needed when the PC1000 model is selected.",
@@ -52,15 +62,15 @@
       }
     },
     {
-      "file": "WQXEmu/cc800/obj.bin",
+      "file": "wqxemu/cc800/cc800.rom",
       "required": false,
       "hint": {
-        "en": "CC800 system ROM (obj.bin); needed when the CC800 model is selected.",
-        "zh": "CC800 系统 ROM（obj.bin）；选择 CC800 机型时需要。"
+        "en": "CC800 system ROM (cc800.rom); needed when the CC800 model is selected.",
+        "zh": "CC800 系统 ROM（cc800.rom）；选择 CC800 机型时需要。"
       }
     },
     {
-      "file": "WQXEmu/cc800/cc800.fls",
+      "file": "wqxemu/cc800/cc800.fls",
       "required": false,
       "hint": {
         "en": "CC800 NOR Flash dump; needed when the CC800 model is selected.",
@@ -68,7 +78,7 @@
       }
     },
     {
-      "file": "WQXEmu/nc2000/nc2000.nor",
+      "file": "wqxemu/nc2000/nc2000.nor",
       "required": false,
       "hint": {
         "en": "NC2000 NOR Flash dump; needed when the NC2000 model is selected.",
@@ -76,7 +86,7 @@
       }
     },
     {
-      "file": "WQXEmu/nc2000/nc2000.nand",
+      "file": "wqxemu/nc2000/nc2000.nand",
       "required": false,
       "hint": {
         "en": "NC2000 NAND Flash dump; needed when the NC2000 model is selected.",
@@ -84,7 +94,7 @@
       }
     },
     {
-      "file": "WQXEmu/nc2000/nc2000.nand0",
+      "file": "wqxemu/nc2000/nc2000.nand0",
       "required": false,
       "hint": {
         "en": "NC2000 first NAND plane; needed when the NC2000 model is selected.",
@@ -92,7 +102,7 @@
       }
     },
     {
-      "file": "WQXEmu/nc3000/nc3000.nor",
+      "file": "wqxemu/nc3000/nc3000.nor",
       "required": false,
       "hint": {
         "en": "NC3000 NOR Flash dump; needed when the NC3000 model is selected.",
@@ -100,7 +110,7 @@
       }
     },
     {
-      "file": "WQXEmu/nc3000/nc3000.nand",
+      "file": "wqxemu/nc3000/nc3000.nand",
       "required": false,
       "hint": {
         "en": "NC3000 NAND Flash dump; needed when the NC3000 model is selected.",
@@ -108,7 +118,7 @@
       }
     },
     {
-      "file": "WQXEmu/nc3000/nc3000.nand0",
+      "file": "wqxemu/nc3000/nc3000.nand0",
       "required": false,
       "hint": {
         "en": "NC3000 first NAND plane; optional, used when the dump provides it.",
@@ -124,7 +134,7 @@
     "pixel_format": "xrgb8888"
   },
   "notes": {
-    "en": "Boots the original firmware of Wenquxing NC1020, PC1000, CC800, NC2000 and NC3000 electronic dictionaries. Firmware is user-supplied: put the dumps of the chosen model under the system directory as WQXEmu/<model>/ and pick the model in core options. Input uses the libretro keyboard interface, with the directional keys also mapped to the RetroPad.",
-    "zh": "运行文曲星 NC1020、PC1000、CC800、NC2000、NC3000 电子词典的原机固件。固件需用户自备：把所选机型的转储放到系统目录 WQXEmu/<model>/ 下，并在核心选项中选中机型。输入使用 libretro 键盘接口，方向键同时映射到 RetroPad。"
+    "en": "Boots the original firmware of Wenquxing NC1020, PC1000, CC800, NC2000 and NC3000 electronic dictionaries. Firmware is user-supplied: put the dumps of the chosen model under the system directory as wqxemu/<model>/ using the exact case-sensitive file names, then pick the model before starting. There is no game content; the core boots from firmware alone. Input uses the libretro keyboard interface, with the directional keys also mapped to the RetroPad.",
+    "zh": "运行文曲星 NC1020、PC1000、CC800、NC2000、NC3000 电子词典的原机固件。固件需用户自备：把所选机型的转储按区分大小写的固定文件名放到系统目录 wqxemu/<model>/ 下，启动前选择机型。本机没有游戏内容，核心仅凭固件启动。输入使用 libretro 键盘接口，方向键同时映射到 RetroPad。"
   }
 }

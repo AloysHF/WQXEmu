@@ -192,28 +192,28 @@ data/
 ```
 
 Firmware is supplied as the content: pass a ZIP that holds the dumps of one
-model. EmulatorJS extracts the archive into its virtual filesystem, picks the
-first entry with a recognized extension, and the core reads the other dumps
-from the same directory.
+model. EmulatorJS extracts the archive into the root of its virtual filesystem,
+and the core reads the dumps from `/wqxemu/<model>/` there.
 
 ```
 nc1020.zip
-  nc1020/
-    obj_lu.bin    # system ROM (.rom / .bin)
-    nc1020.fls    # NOR Flash (.fls / .nor)
+  wqxemu/
+    nc1020/
+      nc1020.rom
+      nc1020.fls
 ```
 
-The top-level folder name (`nc1020`, `pc1000`, `cc800`, `nc2000`, `nc3000`)
-selects the model. Without a recognized folder name the core auto-detects the
-model from the dump sizes. Dumps can also be placed at the archive root.
+The single model folder under `wqxemu/` (`nc1020`, `pc1000`, `cc800`,
+`nc2000`, `nc3000`) selects the model. File names are case-sensitive and fixed
+for each model; an archive with zero or several model folders is rejected.
 
-| Model  | Required dumps                          |
-|--------|-----------------------------------------|
-| NC1020 | system ROM + NOR                        |
-| PC1000 | system ROM + NOR                        |
-| CC800  | system ROM + NOR                        |
-| NC2000 | NOR + NAND + NAND0                      |
-| NC3000 | NOR + NAND                              |
+| Model  | Required dumps                              |
+|--------|---------------------------------------------|
+| NC1020 | `nc1020.rom` + `nc1020.fls`                 |
+| PC1000 | `pc1000.rom` + `pc1000.nor`                 |
+| CC800  | `cc800.rom` + `cc800.fls`                   |
+| NC2000 | `nc2000.nor` + `nc2000.nand` + `nc2000.nand0` |
+| NC3000 | `nc3000.nor` + `nc3000.nand` (`nc3000.nand0` optional) |
 
 Firmware dumps are copyrighted; this bundle ships none.
 EOF

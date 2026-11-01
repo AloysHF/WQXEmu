@@ -6,7 +6,7 @@
 // NAND). The `Machine` trait abstracts those differences so the frontend
 // and the generic `Emulator` shell stay model-agnostic.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -42,9 +42,10 @@ impl MachineModel {
         }
     }
 
-    /// Parse a model name (case-insensitive).
+    /// Parse a model name. Ids are matched byte-for-byte; the same names are
+    /// used for firmware folders, core options and command-line arguments.
     pub fn from_name(name: &str) -> Option<Self> {
-        match name.to_ascii_lowercase().as_str() {
+        match name {
             "nc1020" => Some(MachineModel::Nc1020),
             "pc1000" => Some(MachineModel::Pc1000),
             "cc800" => Some(MachineModel::Cc800),
@@ -53,20 +54,68 @@ impl MachineModel {
             _ => None,
         }
     }
+
+    /// Folder name below the system directory that holds this model's dumps.
+    pub fn firmware_dir_name(self) -> &'static str {
+        self.name()
+    }
+
+    /// Name of the NOR Flash dump for this model. NC1020 and CC800 dumps use
+    /// the historical `.fls` extension.
+    fn nor_file_name(self) -> &'static str {
+        match self {
+            MachineModel::Nc1020 => "nc1020.fls",
+            MachineModel::Pc1000 => "pc1000.nor",
+            MachineModel::Cc800 => "cc800.fls",
+            MachineModel::Nc2000 => "nc2000.nor",
+            MachineModel::Nc3000 => "nc3000.nor",
+        }
+    }
 }
 
 /// ROM / Flash files for a machine.
 ///
-/// - `rom`: system ROM dump (NC1020 `obj_lu.bin` / `.rom`, PC1000 `.rom`)
-/// - `nor`: NOR Flash dump (`.fls` / `.nor`)
-/// - `nand`: NAND Flash dump (NC2000/NC3000 `.nand`)
-/// - `nand0`: first NAND plane (NC2000/NC3000 `.nand0`, optional)
+/// Every frontend reads the same fixed layout below its system directory:
+///
+/// ```text
+/// <system>/
+/// └── wqxemu/
+///     └── <model>/
+///         ├── <model>.rom    # system ROM (NC1020, PC1000, CC800)
+///         ├── <model>.fls    # NOR Flash (NC1020, CC800)
+///         ├── <model>.nor    # NOR Flash (PC1000, NC2000, NC3000)
+///         ├── <model>.nand   # NAND Flash (NC2000, NC3000)
+///         └── <model>.nand0  # first NAND plane (NC2000; optional NC3000)
+/// ```
 #[derive(Clone, Debug, Default)]
 pub struct RomFiles {
     pub rom: Option<PathBuf>,
     pub nor: Option<PathBuf>,
     pub nand: Option<PathBuf>,
     pub nand0: Option<PathBuf>,
+}
+
+/// Root folder below the system directory that holds every model.
+pub const FIRMWARE_ROOT: &str = "wqxemu";
+
+/// Return the entry of `dir` whose name equals `name` exactly.
+///
+/// Directory entries are compared instead of opening `dir/name` directly
+/// because Windows would match names that differ only in case.
+pub fn exact_child(dir: &Path, name: &str) -> Option<PathBuf> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .find(|entry| entry.file_name().to_str() == Some(name))
+        .map(|entry| entry.path())
+}
+
+/// Firmware directory of `model`, if it exists.
+pub fn firmware_directory(system_dir: &Path, model: MachineModel) -> Option<PathBuf> {
+    exact_child(system_dir, FIRMWARE_ROOT)
+        .filter(|path| path.is_dir())
+        .and_then(|root| exact_child(&root, model.firmware_dir_name()))
+        .filter(|path| path.is_dir())
 }
 
 impl RomFiles {
@@ -85,77 +134,57 @@ impl RomFiles {
         }
     }
 
-    /// Discover firmware dumps in `dir` by file extension.
+    /// Resolve the fixed firmware set for `model`.
     ///
-    /// Recognized extensions (case-insensitive): `.rom` / `.bin` map to the
-    /// system ROM slot, `.fls` / `.nor` to NOR, `.nand` to NAND and `.nand0`
-    /// to the first NAND plane. Any other entry is ignored. Fails when a
-    /// slot matches more than one file or when nothing is discovered.
-    pub fn from_dir(dir: &Path) -> Result<Self> {
-        anyhow::ensure!(
-            dir.is_dir(),
-            "Firmware directory not found: {}",
-            dir.display()
-        );
+    /// Only the files the model uses are read, by their exact names. Every
+    /// missing required file is listed in the returned error.
+    pub fn for_model(system_dir: &Path, model: MachineModel) -> Result<Self> {
+        let dir = firmware_directory(system_dir, model).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Firmware directory not found: {}/wqxemu/{}",
+                system_dir.display(),
+                model.firmware_dir_name()
+            )
+        })?;
 
-        let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
-            .with_context(|| format!("Failed to read directory: {}", dir.display()))?
-            .map(|entry| entry.map(|entry| entry.path()))
-            .collect::<std::io::Result<_>>()
-            .with_context(|| format!("Failed to list directory: {}", dir.display()))?;
-        entries.sort();
-
-        let mut roms = Vec::new();
-        let mut nors = Vec::new();
-        let mut nands = Vec::new();
-        let mut nands0 = Vec::new();
-        for path in entries {
-            if !path.is_file() {
-                continue;
+        let name = model.name();
+        let mut missing = Vec::new();
+        let mut slot = |file_name: &str, required: bool| -> Option<PathBuf> {
+            match exact_child(&dir, file_name).filter(|path| path.is_file()) {
+                Some(path) => Some(path),
+                None => {
+                    if required {
+                        missing.push(file_name.to_owned());
+                    }
+                    None
+                }
             }
-            let Some(extension) = path.extension().and_then(|ext| ext.to_str()) else {
-                continue;
-            };
-            match extension.to_ascii_lowercase().as_str() {
-                "rom" | "bin" => roms.push(path),
-                "fls" | "nor" => nors.push(path),
-                "nand" => nands.push(path),
-                "nand0" => nands0.push(path),
-                _ => {}
+        };
+
+        let mut files = Self::default();
+        match model {
+            MachineModel::Nc1020 | MachineModel::Pc1000 | MachineModel::Cc800 => {
+                files.rom = slot(&format!("{name}.rom"), true);
+                files.nor = slot(model.nor_file_name(), true);
+            }
+            MachineModel::Nc2000 => {
+                files.nor = slot(model.nor_file_name(), true);
+                files.nand = slot(&format!("{name}.nand"), true);
+                files.nand0 = slot(&format!("{name}.nand0"), true);
+            }
+            MachineModel::Nc3000 => {
+                files.nor = slot(model.nor_file_name(), true);
+                files.nand = slot(&format!("{name}.nand"), true);
+                files.nand0 = slot(&format!("{name}.nand0"), false);
             }
         }
 
-        let pick = |slot: &str, mut candidates: Vec<PathBuf>| -> Result<Option<PathBuf>> {
-            match candidates.len() {
-                0 => Ok(None),
-                1 => Ok(candidates.pop()),
-                _ => anyhow::bail!(
-                    "Multiple {} dumps in {}: {}",
-                    slot,
-                    dir.display(),
-                    candidates
-                        .iter()
-                        .map(|path| path.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-            }
-        };
-
-        let files = Self {
-            rom: pick("ROM", roms)?,
-            nor: pick("NOR", nors)?,
-            nand: pick("NAND", nands)?,
-            nand0: pick("NAND0", nands0)?,
-        };
-        if files.rom.is_none()
-            && files.nor.is_none()
-            && files.nand.is_none()
-            && files.nand0.is_none()
-        {
+        if !missing.is_empty() {
             anyhow::bail!(
-                "No firmware dumps found in {} (expected .rom/.bin, .fls/.nor, .nand or .nand0 files)",
-                dir.display()
+                "{} firmware is incomplete in {}: missing {}",
+                name,
+                dir.display(),
+                missing.join(", ")
             );
         }
         Ok(files)
@@ -379,69 +408,57 @@ mod tests {
     }
 
     #[test]
-    fn from_dir_maps_extensions_to_firmware_slots() {
-        use std::ffi::OsStr;
-        use std::path::Path;
+    fn for_model_reads_the_fixed_names() {
+        let root = tempfile::tempdir().unwrap();
+        let nc1020 = root.path().join("wqxemu").join("nc1020");
+        std::fs::create_dir_all(&nc1020).unwrap();
+        std::fs::write(nc1020.join("nc1020.rom"), b"rom").unwrap();
+        std::fs::write(nc1020.join("nc1020.fls"), b"nor").unwrap();
+        std::fs::write(nc1020.join("notes.txt"), b"ignored").unwrap();
 
-        let nc1020 = tempfile::tempdir().unwrap();
-        std::fs::write(nc1020.path().join("obj_lu.bin"), b"rom").unwrap();
-        std::fs::write(nc1020.path().join("nc1020.fls"), b"nor").unwrap();
-        std::fs::write(nc1020.path().join("notes.txt"), b"ignored").unwrap();
-        std::fs::create_dir(nc1020.path().join("subdir.fls")).unwrap();
-
-        let files = RomFiles::from_dir(nc1020.path()).unwrap();
-        assert_eq!(
-            files.rom.as_deref().map(Path::file_name),
-            Some(Some(OsStr::new("obj_lu.bin")))
-        );
-        assert_eq!(
-            files.nor.as_deref().map(Path::file_name),
-            Some(Some(OsStr::new("nc1020.fls")))
-        );
+        let files = RomFiles::for_model(root.path(), MachineModel::Nc1020).unwrap();
+        assert_eq!(files.rom, Some(nc1020.join("nc1020.rom")));
+        assert_eq!(files.nor, Some(nc1020.join("nc1020.fls")));
         assert!(files.nand.is_none());
         assert!(files.nand0.is_none());
 
-        let pc1000 = tempfile::tempdir().unwrap();
-        std::fs::write(pc1000.path().join("PC1000.ROM"), b"rom").unwrap();
-        std::fs::write(pc1000.path().join("pc1000.NOR"), b"nor").unwrap();
-
-        let files = RomFiles::from_dir(pc1000.path()).unwrap();
-        assert_eq!(
-            files.rom.as_deref().map(Path::file_name),
-            Some(Some(OsStr::new("PC1000.ROM")))
-        );
-        assert_eq!(
-            files.nor.as_deref().map(Path::file_name),
-            Some(Some(OsStr::new("pc1000.NOR")))
-        );
-
-        let nc2000 = tempfile::tempdir().unwrap();
+        let nc2000 = root.path().join("wqxemu").join("nc2000");
+        std::fs::create_dir_all(&nc2000).unwrap();
         for name in ["nc2000.nor", "nc2000.nand", "nc2000.nand0"] {
-            std::fs::write(nc2000.path().join(name), b"flash").unwrap();
+            std::fs::write(nc2000.join(name), b"flash").unwrap();
         }
 
-        let files = RomFiles::from_dir(nc2000.path()).unwrap();
+        let files = RomFiles::for_model(root.path(), MachineModel::Nc2000).unwrap();
         assert!(files.rom.is_none());
         assert!(files.nor.is_some());
         assert!(files.nand.is_some());
         assert!(files.nand0.is_some());
+
+        let nc3000 = root.path().join("wqxemu").join("nc3000");
+        std::fs::create_dir_all(&nc3000).unwrap();
+        std::fs::write(nc3000.join("nc3000.nor"), b"nor").unwrap();
+        std::fs::write(nc3000.join("nc3000.nand"), b"nand").unwrap();
+        let files = RomFiles::for_model(root.path(), MachineModel::Nc3000).unwrap();
+        assert!(files.nand0.is_none(), "nc3000.nand0 is optional");
     }
 
     #[test]
-    fn from_dir_rejects_ambiguous_and_empty_directories() {
-        let ambiguous = tempfile::tempdir().unwrap();
-        std::fs::write(ambiguous.path().join("first.bin"), b"one").unwrap();
-        std::fs::write(ambiguous.path().join("second.bin"), b"two").unwrap();
+    fn for_model_rejects_missing_and_misnamed_files() {
+        let root = tempfile::tempdir().unwrap();
+        let nc1020 = root.path().join("wqxemu").join("nc1020");
+        std::fs::create_dir_all(&nc1020).unwrap();
+        std::fs::write(nc1020.join("NC1020.ROM"), b"rom").unwrap();
+        std::fs::write(nc1020.join("nc1020.fls"), b"nor").unwrap();
 
-        let error = RomFiles::from_dir(ambiguous.path()).unwrap_err();
-        assert!(error.to_string().contains("Multiple ROM dumps"));
+        let error = RomFiles::for_model(root.path(), MachineModel::Nc1020).unwrap_err();
+        assert!(error.to_string().contains("nc1020.rom"), "{error}");
 
         let empty = tempfile::tempdir().unwrap();
-        let error = RomFiles::from_dir(empty.path()).unwrap_err();
-        assert!(error.to_string().contains("No firmware dumps found"));
-
-        let missing = empty.path().join("does-not-exist");
-        assert!(RomFiles::from_dir(&missing).is_err());
+        let error = RomFiles::for_model(empty.path(), MachineModel::Nc1020).unwrap_err();
+        assert!(
+            error.to_string().contains("Firmware directory not found"),
+            "{error}"
+        );
     }
 
     #[test]

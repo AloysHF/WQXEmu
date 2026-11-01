@@ -225,16 +225,17 @@
 
       <div id="play-picker" class="play-overlay">
         <h2 data-i18n="picker-title">选择固件包</h2>
-        <p data-i18n="picker-desc">固件包需为 ZIP，内含同一机型的全部 dump。推荐以机型名建一个顶层文件夹，例如：</p>
-        <pre class="play-picker-layout">nc1020/
-  obj_lu.bin    ROM (.rom / .bin)
-  nc1020.fls    NOR (.fls / .nor)</pre>
+        <p data-i18n="picker-desc">固件包需为 ZIP，按 <code>wqxemu/&lt;机型&gt;/</code> 放入同一机型的全部固定文件名 dump，例如：</p>
+        <pre class="play-picker-layout">wqxemu/
+  nc1020/
+    nc1020.rom
+    nc1020.fls</pre>
         <label class="btn btn-primary">
           <span data-i18n="pick-firmware">选择固件 ZIP</span>
           <input id="firmware-file" type="file" accept=".zip,application/zip" hidden>
         </label>
         <p id="play-picker-error" class="play-picker-error" hidden></p>
-        <p class="play-picker-hint" data-i18n="picker-hint">也可以把 ZIP 拖进窗口。文件只在浏览器本地处理，不会被上传；固件版权归原厂所有，请使用自己合法持有的 dump。机型识别规则见 <a href="https://github.com/AloysHF/WQXEmu/blob/master/docs/EmulatorJS-Core.md" target="_blank" rel="noopener">文档</a>。</p>
+        <p class="play-picker-hint" data-i18n="picker-hint">也可以把 ZIP 拖进窗口。文件只在浏览器本地处理，不会被上传；固件版权归原厂所有，请使用自己合法持有的 dump。压缩包内必须且只能有一个机型文件夹，文件名区分大小写。规则见 <a href="https://github.com/AloysHF/WQXEmu/blob/master/docs/EmulatorJS-Core.md" target="_blank" rel="noopener">文档</a>。</p>
       </div>
 
       <div id="play-error" class="play-overlay" hidden>
@@ -268,9 +269,9 @@
           'status-title': '正在加载核心…',
           'status-desc': '首次启动需要下载 WebAssembly 核心，请稍候。',
           'picker-title': '选择固件包',
-          'picker-desc': '固件包需为 ZIP，内含同一机型的全部 dump。推荐以机型名建一个顶层文件夹，例如：',
+          'picker-desc': '固件包需为 ZIP，按 <code>wqxemu/&lt;机型&gt;/</code> 放入同一机型的全部固定文件名 dump，例如：',
           'pick-firmware': '选择固件 ZIP',
-          'picker-hint': '也可以把 ZIP 拖进窗口。文件只在浏览器本地处理，不会被上传；固件版权归原厂所有，请使用自己合法持有的 dump。机型识别规则见 <a href="https://github.com/AloysHF/WQXEmu/blob/master/docs/EmulatorJS-Core.md" target="_blank" rel="noopener">文档</a>。',
+          'picker-hint': '也可以把 ZIP 拖进窗口。文件只在浏览器本地处理，不会被上传；固件版权归原厂所有，请使用自己合法持有的 dump。压缩包内必须且只能有一个机型文件夹，文件名区分大小写。规则见 <a href="https://github.com/AloysHF/WQXEmu/blob/master/docs/EmulatorJS-Core.md" target="_blank" rel="noopener">文档</a>。',
           'error-title': '无法启动在线模拟器',
           'error-text': 'EmulatorJS 运行时未部署（缺少 <code>data/loader.js</code>）。请通过 Pages 部署流程生成 <code>site/data</code>，或直接使用独立版模拟器。',
           'ctrl-move': '<kbd>方向键</kbd> / 手柄移动',
@@ -290,9 +291,9 @@
           'status-title': 'Loading core…',
           'status-desc': 'The first launch downloads the WebAssembly core.',
           'picker-title': 'Choose a firmware archive',
-          'picker-desc': 'The archive must be a ZIP holding every dump of a single model. Put them in a top-level folder named after the model, for example:',
+          'picker-desc': 'The archive must be a ZIP with every dump of one model under <code>wqxemu/&lt;model&gt;/</code>, using the exact file names, for example:',
           'pick-firmware': 'Choose Firmware ZIP',
-          'picker-hint': 'You can also drop the ZIP onto the window. Files are processed locally in your browser and never uploaded. Firmware is copyrighted; use dumps you legally own. See the <a href="https://github.com/AloysHF/WQXEmu/blob/master/docs/EmulatorJS-Core.md" target="_blank" rel="noopener">documentation</a> for model detection.',
+          'picker-hint': 'You can also drop the ZIP onto the window. Files are processed locally in your browser and never uploaded. Firmware is copyrighted; use dumps you legally own. The archive must contain exactly one model folder, and file names are case-sensitive. See the <a href="https://github.com/AloysHF/WQXEmu/blob/master/docs/EmulatorJS-Core.md" target="_blank" rel="noopener">documentation</a> for the layout.',
           'error-title': 'Unable to start the online emulator',
           'error-text': 'The EmulatorJS runtime is not deployed (missing <code>data/loader.js</code>). Generate <code>site/data</code> through the Pages workflow, or use the standalone emulator.',
           'ctrl-move': '<kbd>Arrows</kbd> / gamepad Move',
