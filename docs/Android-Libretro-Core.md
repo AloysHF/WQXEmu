@@ -118,3 +118,29 @@ For emulator-level errors and logging settings, use the
 - [RetroArch Android Guide](https://docs.libretro.com/guides/install-android/)
 - [Rust Android Guide](https://mozilla.github.io/book/ch20-05-rust-on-android.html)
 - [Android NDK Documentation](https://developer.android.com/ndk)
+
+## RetroDroid
+
+The same core ships inside [RetroDroid](https://github.com/AloysHF/RetroDroid),
+the all-in-one Android app for this emulator family. RetroDroid loads
+`libwqxemu.so` directly (no RetroArch required) and reads the neighbouring
+`android.json` for the system profile: display names, firmware list, input
+preset, orientation and pixel format.
+
+Rules the core follows for any Android host:
+
+- Saves and persistent session files go to the directory answered by
+  `RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY`; the content path may be a throwaway
+  copy in the app cache, so nothing is written next to it.
+- Firmware is read from the content path the frontend hands over; if that
+  cached set is unusable, the core falls back to
+  `RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY` (`WQXEmu/<model>/`). A real file
+  path is required and an in-memory buffer is ignored.
+- Load failures are reported with `RETRO_ENVIRONMENT_SET_MESSAGE` and through
+  the frontend log interface, never as a silent `false`.
+- Panics are caught at the C ABI boundary (`catch_unwind` in every exported
+  `retro_*` entry point), so a bad frame cannot kill the host app.
+- Save states carry a `WQXS` magic header plus a format version; states from
+  another version or model are rejected instead of being misread.
+- Build with `RUSTFLAGS="-C link-arg=-Wl,-z,max-page-size=16384"` so every
+  `LOAD` segment is 16 KB aligned for Android 15 and newer devices.
