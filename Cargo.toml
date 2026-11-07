@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/wqxemu-core",
     "crates/wqxemu",
+    "crates/wqxflash",
     "crates/wqxemu-libretro",
 ]
 default-members = ["crates/wqxemu-libretro"]

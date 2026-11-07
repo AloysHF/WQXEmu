@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::audio::Audio;
 use crate::cpu::{Cpu, CpuBus, RESET_VECTOR};
-use crate::flash::{Flash, FlashStep};
+use crate::flash::Flash;
+use crate::injection::InjectionBridge;
 use crate::input::Input;
 use crate::io::IoHandler;
 use crate::lcd::Lcd;
@@ -31,11 +32,22 @@ pub struct Nc1020Machine {
     #[serde(skip)]
     rom: Vec<u8>,
     nor: Vec<u8>,
+    #[serde(skip)]
+    injection: InjectionBridge,
+    #[serde(skip)]
+    nor_read_map: Option<Vec<u8>>,
+    #[serde(skip)]
+    nor_read_trace: Option<Vec<(u16, u32)>>,
+    #[serde(skip)]
+    nor_trace_active: bool,
+    #[serde(skip)]
+    nor_trace_full: bool,
 }
 
 impl Nc1020Machine {
     /// Create the machine and load its ROM / NOR files.
     pub fn new(files: &RomFiles) -> Result<Self> {
+        let trace_pc = std::env::var_os("WQX_NORTRACE_PC").is_some();
         let mut machine = Self {
             memory: Memory::new(),
             input: Input::new(),
@@ -45,6 +57,15 @@ impl Nc1020Machine {
             flash: Flash::new(),
             rom: vec![0; ROM_SIZE],
             nor: vec![0; NOR_SIZE],
+            injection: InjectionBridge::new(),
+            nor_read_map: if std::env::var_os("WQX_NORTRACE").is_some() {
+                Some(vec![0u8; NOR_SIZE / 64])
+            } else {
+                None
+            },
+            nor_read_trace: if trace_pc { Some(Vec::new()) } else { None },
+            nor_trace_active: trace_pc,
+            nor_trace_full: std::env::var_os("WQX_NORTRACE_ALL").is_some(),
         };
 
         if let Some(rom_path) = &files.rom {
@@ -173,6 +194,83 @@ impl Machine for Nc1020Machine {
         self.input.set_key(key_id, pressed);
     }
 
+    fn poke(&mut self, addr: u16, val: u8) {
+        if addr < IO_LIMIT {
+            self.memory.io[addr as usize] = val;
+        } else {
+            let (region, offset) = self.memory.map_address(addr);
+            match region {
+                MemRegion::Ram => self.memory.ram[offset] = val,
+                MemRegion::Bbs => {
+                    let page = offset / 0x2000;
+                    let off = offset % 0x2000;
+                    if page < 16 && off < 0x2000 {
+                        self.memory.bbs_pages[page][off] = val;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn inject_activate(&mut self, data: Vec<u8>) {
+        self.injection.start(data);
+    }
+
+    fn inject_active(&self) -> bool {
+        self.injection.is_active()
+    }
+
+    fn inject_bytes_sent(&self) -> usize {
+        self.injection.bytes_sent
+    }
+
+    fn debug_nor_window(&self, off: usize, len: usize) -> Vec<u8> {
+        let end = (off + len).min(self.nor.len());
+        if off < end {
+            self.nor[off..end].to_vec()
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn debug_fill_nor(&mut self, val: u8) {
+        self.nor.fill(val);
+    }
+
+    fn debug_nor_read_map(&self) -> Vec<u8> {
+        self.nor_read_map.clone().unwrap_or_default()
+    }
+
+    fn debug_nor_read_trace(&self) -> Vec<(u16, u32)> {
+        self.nor_read_trace.clone().unwrap_or_default()
+    }
+
+    fn debug_nor_read_trace_set_active(&mut self, active: bool) {
+        self.nor_trace_active = active;
+    }
+
+    fn debug_nor_read_trace_clear(&mut self) {
+        if let Some(tr) = self.nor_read_trace.as_mut() {
+            tr.clear();
+        }
+    }
+
+    fn flash_stats(&self) -> (u32, u32, u32) {
+        (
+            self.flash.write_calls,
+            self.flash.program_ops,
+            self.flash.erase_ops,
+        )
+    }
+
+    fn gffs_entries(&self) -> Vec<crate::injection::GffsEntry> {
+        // The application entry area lives at 0x22000 (category list at
+        // 0x21000) in this firmware build — same area the offline injector
+        // writes to.
+        crate::injection::gffs_parse_dir(&self.nor, 0x22000)
+    }
+
     fn is_sleeping(&self) -> bool {
         self.input.slept
     }
@@ -187,6 +285,15 @@ impl Machine for Nc1020Machine {
             flash: &mut self.flash,
             rom: &self.rom,
             nor: &mut self.nor,
+            injection: &mut self.injection,
+            nor_read_map: self.nor_read_map.as_deref_mut(),
+            nor_read_trace: if self.nor_trace_active {
+                self.nor_read_trace.as_mut()
+            } else {
+                None
+            },
+            nor_trace_full: self.nor_trace_full,
+            pc: cpu.pc,
         };
 
         let cycles = cpu.step(&mut bus);
@@ -350,10 +457,24 @@ struct Nc1020Bus<'a> {
     flash: &'a mut Flash,
     rom: &'a [u8],
     nor: &'a mut [u8],
+    injection: &'a mut InjectionBridge,
+    nor_read_map: Option<&'a mut [u8]>,
+    nor_read_trace: Option<&'a mut Vec<(u16, u32)>>,
+    nor_trace_full: bool,
+    pc: u16,
 }
 
 impl<'a> CpuBus for Nc1020Bus<'a> {
     fn read(&mut self, addr: u16) -> u8 {
+        // Magic injection port: while the GFFS pump is active the firmware's
+        // pump routine reads file bytes from 0x3FFF. Intercept those reads so
+        // the host can feed the file without touching real LCD/IO hardware.
+        if addr == 0x3FFF {
+            if let Some(value) = self.injection.read(addr) {
+                return value;
+            }
+        }
+
         if addr < IO_LIMIT {
             return IoHandler::read(
                 addr as u8,
@@ -375,6 +496,22 @@ impl<'a> CpuBus for Nc1020Bus<'a> {
                 }
             }
             MemRegion::Nor => {
+                if let Some(map) = self.nor_read_map.as_mut() {
+                    if let Some(slot) = map.get_mut(offset / 64) {
+                        *slot = 1;
+                    }
+                }
+                if let Some(tr) = self.nor_read_trace.as_mut() {
+                    // By default only record GFFS bookkeeping accesses
+                    // (0x20000..0x30000) to keep the trace small and focused.
+                    // When `WQX_NORTRACE_ALL` is set, record every NOR read so
+                    // we can see where the firmware pulls application data from
+                    // (it is NOT the 0x22000 entry area).
+                    let in_gffs = (0x20000..0x30000).contains(&offset);
+                    if in_gffs || self.nor_trace_full {
+                        tr.push((self.pc, offset as u32));
+                    }
+                }
                 if offset < self.nor.len() {
                     self.nor[offset]
                 } else {
@@ -497,8 +634,12 @@ impl<'a> CpuBus for Nc1020Bus<'a> {
             return;
         }
 
-        // Banked region writes (0x4000-0x7FFF)
-        if addr < 0x8000 {
+        // Banked region writes (0x4000-0xBFFF). This includes the full 32KB
+        // NOR window: the flash command sequence writes the unlock byte to
+        // 0xAAAA, which lives in the 0x8000-0xBFFF half, so those writes must
+        // reach the flash controller too (previously they were dropped as
+        // "read-only", which silently broke every firmware flash write).
+        if addr < 0xC000 {
             let (region, offset) = self.memory.map_address(addr);
             match region {
                 MemRegion::Ram if offset < RAM_SIZE => {
@@ -511,13 +652,7 @@ impl<'a> CpuBus for Nc1020Bus<'a> {
                 }
                 _ => {} // ROM/BBS are read-only
             }
-            return;
         }
-
-        // 0x8000+: Read-only (ROM/BBS)
-        // But flash reset command can be sent here
-        if addr == 0x8000 && value == 0xF0 {
-            self.flash.step = FlashStep::Idle;
-        }
+        // 0xC000+: BBS / fixed ROM are read-only.
     }
 }

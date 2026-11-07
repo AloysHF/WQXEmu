@@ -1,0 +1,18 @@
+[package]
+name = "wqxflash"
+version.workspace = true
+edition.workspace = true
+description = "Offline GFFS flash-injection CLI for WQXEmu (injects .bin/.bas games without touching the source firmware)"
+license.workspace = true
+
+[[bin]]
+name = "wqxflash"
+path = "src/main.rs"
+
+[dependencies]
+wqxemu-core.workspace = true
+anyhow.workspace = true
+log.workspace = true
+env_logger.workspace = true
+clap.workspace = true
+image.workspace = true

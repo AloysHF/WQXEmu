@@ -10,10 +10,30 @@ use anyhow::{Context, Result};
 
 use crate::audio::SAMPLE_RATE;
 use crate::cpu::{Cpu, RESET_VECTOR};
+use crate::injection::{
+    inject_config, nand_inject, nand_root_entries, GffsEntry, NandDirEntry, NandFsParams,
+    NandInjection,
+};
 use crate::lcd::{LCD_HEIGHT, LCD_WIDTH};
 use crate::machine::{Machine, MachineModel, RomFiles};
 use crate::machines;
 use crate::save::{PersistentState, SaveState, PERSISTENT_STATE_VERSION};
+
+/// Result of a single file-injection attempt.
+#[derive(Debug, Clone)]
+pub struct InjectReport {
+    /// File name staged into the GFFS directory.
+    pub name: String,
+    /// Number of payload bytes delivered to the firmware.
+    pub bytes_sent: usize,
+    /// Original file size in bytes.
+    pub file_size: usize,
+    /// Whether the file is visible in the on-disk GFFS directory after a
+    /// clean re-mount, i.e. the firmware actually accepted and persisted it.
+    pub recognized: bool,
+    /// Full list of user-file directory entries after the operation.
+    pub entries: Vec<GffsEntry>,
+}
 
 /// Main emulator struct.
 pub struct Emulator {
@@ -83,6 +103,11 @@ impl Emulator {
         self.machine.save_nor(Path::new(path))
     }
 
+    /// Save the NAND Flash contents to a file (models that keep the GFFS in NAND).
+    pub fn save_nand(&self, path: &str) -> Result<()> {
+        self.machine.save_nand(Path::new(path))
+    }
+
     /// Set a key state.
     pub fn set_key(&mut self, key_id: u8, pressed: bool) {
         self.machine.set_key(key_id, pressed);
@@ -98,6 +123,486 @@ impl Emulator {
     pub fn run_frame(&mut self) {
         self.machine.run_frame(&mut self.cpu);
         self.frame_count += 1;
+    }
+
+    /// Run the CPU directly for `cycles` (bypassing the per-frame LCD/EOFrame
+    /// work). Used by the flash-injection flow to boot the firmware and pump
+    /// the file quickly without frame pacing.
+    pub fn run_cycles(&mut self, cycles: u64) {
+        let mut remaining = cycles;
+        while remaining > 0 {
+            let used = self.machine.step(&mut self.cpu);
+            remaining = remaining.saturating_sub(used);
+        }
+    }
+
+    /// Boot the firmware far enough that its BRK syscall dispatcher and the
+    /// GFFS file system are initialised. Interactive file transfer relies on
+    /// the firmware already being up (the emulator runs continuously); for an offline
+    /// batch injection we have to run the boot ourselves before diverting the
+    /// CPU to the pump routine at 0x3000.
+    ///
+    /// The firmware parks itself in sleep mode once it reaches the main menu,
+    /// so we stop as soon as `is_sleeping()` is true, capped at a frame budget
+    /// so we never hang if a model never sleeps.
+    pub fn boot_for_injection(&mut self) {
+        let mut frames = 0;
+        // NC2000/NC3000 take ~1200 frames to reach their desktop (NAND check),
+        // NC1020 sleeps after ~200, so this cap only bounds the slow models.
+        let max_frames: u32 = std::env::var("WQX_BOOT_FRAMES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1800);
+        let boot_keys = self.machine.injection_boot_keys().to_vec();
+        let mut next_key = 0usize;
+        while frames < max_frames && !self.machine.is_sleeping() {
+            self.run_frame();
+            frames += 1;
+            // Some models stop at a confirmation prompt ("keep the data in
+            // flash?") before their desktop appears; answer it repeatedly so
+            // it does not matter when exactly the prompt shows up.
+            if !boot_keys.is_empty() && frames >= 150 && frames % 45 == 0 {
+                let key = boot_keys[next_key % boot_keys.len()];
+                self.machine.set_key(key, true);
+                for _ in 0..4 {
+                    self.run_frame();
+                    frames += 1;
+                }
+                self.machine.set_key(key, false);
+                self.run_frame();
+                frames += 1;
+                next_key += 1;
+            }
+        }
+        log::info!(
+            "Injection boot complete after {} frames (sleeping={})",
+            frames,
+            self.machine.is_sleeping()
+        );
+    }
+
+    /// Inject `data` into the machine's NOR/NAND flash as a file named `name`
+    /// by driving the firmware's own GFFS write syscalls through the 0x3FFF
+    /// pump protocol.
+    ///
+    /// This is an offline re-implementation of the interactive transfer flow: it
+    /// boots the firmware, stages the file name / parameters and the pump
+    /// routine in RAM, diverts the CPU to the pump at 0x3000, and feeds the
+    /// file bytes through the magic 0x3FFF IO port until the firmware commits
+    /// the file. Afterward it performs a clean reboot and re-mounts the file
+    /// system to confirm the firmware actually recognises the new file.
+    ///
+    /// The caller is responsible for persisting the modified flash with
+    /// [`Emulator::save_nor`] (or the NAND equivalent); this method only
+    /// mutates the in-memory flash image so that `tmp/roms` stays untouched.
+    pub fn inject_file(&mut self, name: &str, data: &[u8]) -> Result<InjectReport> {
+        let Some(cfg) = inject_config(self.model()) else {
+            anyhow::bail!(
+                "Model `{}` does not yet support firmware-driven flash injection",
+                self.model().name()
+            );
+        };
+        if data.len() > 0xFFFF {
+            anyhow::bail!(
+                "File `{}` is too large ({} bytes); GFFS entries are limited to 65535 bytes",
+                name,
+                data.len()
+            );
+        }
+
+        // 1. Make sure the firmware (BRK dispatcher + GFFS) is up.
+        self.boot_for_injection();
+
+        // 2. Stage the 16-byte, space-padded file name.
+        let mut padded = [cfg.name_pad; 16];
+        let name_bytes = name.as_bytes();
+        let n = name_bytes.len().min(16);
+        padded[..n].copy_from_slice(&name_bytes[..n]);
+        for (i, &b) in padded.iter().enumerate() {
+            self.machine.poke(cfg.name_addr + i as u16, b);
+        }
+
+        // 3. Stage the model-specific parameter bytes.
+        for &(addr, val) in &cfg.params {
+            self.machine.poke(addr, val);
+        }
+
+        // 4. Warm-reset flag: the pump's final `BRK 0x01 0xC0` reboots the
+        //    device; with this flag set the reboot is a quick warm boot that
+        //    re-mounts (rather than reformats) the file system.
+        self.machine.poke(0x02, 1);
+        self.machine.poke(0x03, 1);
+
+        // 5. Copy the pump routine to 0x3000. `WQX_SIG` lets us override the
+        //    BRK signature byte (0x93) to probe which signature a firmware
+        //    build expects.
+        let mut routine: Vec<u8> = cfg.routine.to_vec();
+        if let Ok(sig) = std::env::var("WQX_SIG") {
+            if let Ok(value) = u8::from_str_radix(sig.trim_start_matches("0x"), 16) {
+                for b in routine.iter_mut() {
+                    if *b == 0x93 {
+                        *b = value;
+                    }
+                }
+            }
+        }
+        // WQX_WID overrides the "write block" BRK id (0x05 on nc1020) so we
+        // can probe a firmware's id semantics.
+        if let Ok(wid) = std::env::var("WQX_WID") {
+            if let Ok(value) = u8::from_str_radix(wid.trim_start_matches("0x"), 16) {
+                for i in 0..routine.len().saturating_sub(2) {
+                    if routine[i] == 0x00 && routine[i + 2] == 0x93 && routine[i + 1] == 0x05 {
+                        routine[i + 1] = value;
+                    }
+                }
+            }
+        }
+        // WQX_CID overrides the "commit" BRK id (0x07).
+        if let Ok(cid) = std::env::var("WQX_CID") {
+            if let Ok(value) = u8::from_str_radix(cid.trim_start_matches("0x"), 16) {
+                for i in 0..routine.len().saturating_sub(2) {
+                    if routine[i] == 0x00 && routine[i + 2] == 0x93 && routine[i + 1] == 0x07 {
+                        routine[i + 1] = value;
+                    }
+                }
+            }
+        }
+        for (i, &b) in routine.iter().enumerate() {
+            self.machine.poke(0x3000 + i as u16, b);
+        }
+
+        log::info!(
+            "pre-inject: bank_switch=0x{:02X} io0d=0x{:02X} name_addr=0x{:04X} tbl400A={:02X}{:02X}",
+            self.peek(0x00),
+            self.peek(0x0D),
+            cfg.name_addr,
+            self.peek(0x400B),
+            self.peek(0x400A)
+        );
+
+        // The interactive transfer path asserts a "warm reset" by leaving the timer counters
+        // non-zero; the firmware's syscall layer checks this before allowing
+        // file-system writes.
+        self.machine.poke(0x02, 1);
+        self.machine.poke(0x03, 1);
+
+        // 6. Arm the byte bridge and divert the CPU to the pump.
+        let nand_ops_before = self.machine.nand_program_ops();
+        self.machine.inject_activate(data.to_vec());
+        self.cpu.pc = 0x3000;
+
+        if std::env::var("WQX_TRACE").is_ok() {
+            // Run the whole pump while recording the BRK syscalls the firmware
+            // issues, so the create/write/close sequence is visible.
+            let mut trace: Vec<u16> = Vec::new();
+            let mut calls: Vec<(u8, u8, u16)> = Vec::new();
+            let mut steps = 0u64;
+            while self.machine.inject_active() && steps < 4_000_000 {
+                steps += 1;
+                if trace.len() < 400 {
+                    trace.push(self.cpu.pc);
+                }
+                if self.cpu.pc == 0xEB1E && calls.len() < 400 {
+                    // At 0xEB1E the firmware has just loaded the syscall id
+                    // into 0xB1 and the signature into 0x03F5.
+                    let id = self.peek(0xB1);
+                    let sig = self.peek(0x03F5);
+                    let ptr = self.cpu.pc;
+                    if calls.last().map(|c| (c.0, c.1)) != Some((id, sig)) {
+                        calls.push((id, sig, ptr));
+                    }
+                }
+                self.machine.step(&mut self.cpu);
+            }
+            log::info!(
+                "TRACE steps={} calls={} max=0x{:04X}",
+                steps,
+                calls.len(),
+                trace.iter().copied().max().unwrap_or(0)
+            );
+            log::info!("TRACE seq: {:04X?}", &trace[..trace.len().min(120)]);
+            for (i, (id, sig, _)) in calls.iter().enumerate().take(80) {
+                log::info!("  call {i}: id=0x{id:02X} sig=0x{sig:02X}");
+            }
+        }
+
+        // 7. Pump until the bridge reports completion. The bridge deactivates
+        //    itself once the last byte has been delivered and the firmware
+        //    reads the terminating 0.
+        const STEP_CYCLES: u64 = 2_000;
+        // NC2000/NC3000 redirect the file with many nested syscalls plus NAND
+        // page reads, so they need a much larger budget than the NC1020.
+        let budget: u64 = std::env::var("WQX_PUMP_CYCLES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(cfg.pump_cycles);
+        let max_steps = budget / STEP_CYCLES;
+        let mut guard = 0u64;
+        while self.machine.inject_active() && guard < max_steps {
+            self.run_cycles(STEP_CYCLES);
+            guard += 1;
+        }
+        if self.machine.inject_active() {
+            self.machine.inject_activate(Vec::new()); // force deactivate
+            anyhow::bail!(
+                "Injection of `{}` timed out (firmware did not finish pumping)",
+                name
+            );
+        }
+
+        // 8. Let the commit syscall (BRK 0x07 ...) finish writing to flash.
+        //    The following `BRK 0x01 0xC0` begins a warm reset; bound it so we
+        //    don't emulate a whole reboot.
+        self.run_cycles(300_000);
+
+        // Debug aid (WQX_RAM_SEARCH=1): look for the injected file's leading
+        // bytes in the CPU-visible memory to see whether the firmware's write
+        // syscalls actually buffered the data anywhere.
+        if std::env::var("WQX_RAM_SEARCH").is_ok() && data.len() >= 8 {
+            let needle = &data[..8];
+            let mut hits = Vec::new();
+            let mut window = Vec::new();
+            for a in (0u16..0xFFFE).step_by(1) {
+                window.push(self.peek(a));
+                if window.len() > needle.len() {
+                    window.remove(0);
+                }
+                if window.len() == needle.len() && window[..] == *needle {
+                    hits.push(a + 1 - needle.len() as u16);
+                }
+            }
+            log::info!("RAM_SEARCH: file leading bytes found at {:04X?}", hits);
+        }
+
+        let bytes_sent = self.machine.inject_bytes_sent();
+
+        // 9. Validate end-to-end: clean reboot and re-mount the file system,
+        //    then check whether the firmware now lists our file. `gffs_entries`
+        //    reads the on-disk directory directly, which is the ground truth
+        //    for what was persisted.
+        self.reset();
+        self.boot_for_injection();
+        let entries = self.machine.gffs_entries();
+        let in_directory = entries
+            .iter()
+            .any(|e| e.name.eq_ignore_ascii_case(name.trim()));
+        // Models whose file system lives in NAND (nc2000/nc3000) have no NOR
+        // directory to re-read, so fall back to "the firmware programmed NAND
+        // while we pumped the file in".
+        // NAND models (nc2000/nc3000) keep the directory in NAND, so check for
+        // the stored (NUL terminated) name instead of a NOR directory entry.
+        let mut needle = name.trim().as_bytes().to_vec();
+        needle.push(0);
+        let nand_entry = self.machine.nand_contains(&needle);
+        let recognized = in_directory || nand_entry;
+        let (wc, po, eo) = self.machine.flash_stats();
+        log::info!(
+            "inject_file: name={} bytes_sent={} recognized={} entries={} flash(w={} prog={} erase={}) nand_prog={}",
+            name,
+            bytes_sent,
+            recognized,
+            entries.len(),
+            wc,
+            po,
+            eo,
+            self.machine.nand_program_ops() - nand_ops_before
+        );
+        let _ = nand_ops_before;
+
+        Ok(InjectReport {
+            name: name.to_string(),
+            bytes_sent,
+            file_size: data.len(),
+            recognized,
+            entries,
+        })
+    }
+
+    /// Directly add or update a file in the NC2000 / NC3000 NAND file system by
+    /// editing the in-memory NAND image offline (no firmware execution).  This
+    /// is the reliable path for those models: the firmware-driven pump writes a
+    /// file's data pages but never commits the FAT / directory metadata in
+    /// WQXEmu, so it cannot register a file.  Returns the slot and data-page
+    /// span that were written.
+    pub fn inject_nand_file(
+        &mut self,
+        name: &str,
+        data: &[u8],
+        replace: Option<&str>,
+    ) -> Result<NandInjection> {
+        let Some(params) = NandFsParams::for_model(self.model()) else {
+            anyhow::bail!(
+                "Model `{}` does not use the NC2000/NC3000 NAND layout",
+                self.model().name()
+            );
+        };
+        let Some(nand) = self.machine.nand_mut() else {
+            anyhow::bail!("Model `{}` has no NAND image loaded", self.model().name());
+        };
+        nand_inject(nand, &params, name, data, replace)
+    }
+
+    /// List the root-directory entries of the NC2000 / NC3000 NAND file system.
+    pub fn nand_root_list(&self) -> Vec<NandDirEntry> {
+        if let Some(params) = NandFsParams::for_model(self.model()) {
+            if let Some(nand) = self.machine.nand_slice() {
+                return nand_root_entries(nand, &params);
+            }
+        }
+        Vec::new()
+    }
+
+    /// List the user-file directory entries currently persisted in flash.
+    pub fn gffs_list(&self) -> Vec<GffsEntry> {
+        self.machine.gffs_entries()
+    }
+
+    /// Read a window of the on-disk NOR image (logical, already un-swapped).
+    /// Debug helper for tracing flash mutations.
+    pub fn debug_nor_bytes(&self, off: usize, len: usize) -> Vec<u8> {
+        self.machine.debug_nor_window(off, len)
+    }
+
+    /// Debug helper: per-64-byte NOR read map (1 = block read since boot).
+    pub fn debug_nor_read_map(&self) -> Vec<u8> {
+        self.machine.debug_nor_read_map()
+    }
+
+    /// Debug helper: `(pc, nor_offset)` pairs for GFFS-region NOR reads since
+    /// boot (only populated when `WQX_NORTRACE_PC` is set). Used to reverse
+    /// the firmware's GFFS `start` → physical address mapping.
+    pub fn debug_nor_read_trace(&self) -> Vec<(u16, u32)> {
+        self.machine.debug_nor_read_trace()
+    }
+
+    /// Enable/disable GFFS-region read tracing at runtime, so a caller can
+    /// capture only a specific interaction (e.g. opening the application menu).
+    pub fn debug_nor_read_trace_set_active(&mut self, active: bool) {
+        self.machine.debug_nor_read_trace_set_active(active);
+    }
+
+    /// Discard the captured GFFS-region read trace.
+    pub fn debug_nor_read_trace_clear(&mut self) {
+        self.machine.debug_nor_read_trace_clear();
+    }
+
+    /// Number of NAND program operations since power-on.
+    pub fn nand_program_ops(&self) -> u32 {
+        self.machine.nand_program_ops()
+    }
+
+    /// Number of byte writes to the NAND data register since power-on.
+    pub fn nand_write_calls(&self) -> u32 {
+        self.machine.nand_write_calls()
+    }
+
+    /// Debug helper: per-64-byte NAND read map (1 = block read since boot).
+    pub fn debug_nand_read_map(&self) -> Vec<u8> {
+        self.machine.debug_nand_read_map()
+    }
+
+    /// Debug helper: copy a window of the NAND image.
+    pub fn debug_nand_bytes(&self, off: usize, len: usize) -> Vec<u8> {
+        self.machine.debug_nand_window(off, len)
+    }
+
+    /// Debug helper: fill the whole NOR image with `val` (e.g. 0xFF for a
+    /// blank/unformatted flash).
+    pub fn debug_fill_nor(&mut self, val: u8) {
+        self.machine.debug_fill_nor(val);
+    }
+
+    /// Diagnostics: `(write_calls, program_ops, erase_ops)` for the NOR flash.
+    pub fn flash_stats(&self) -> (u32, u32, u32) {
+        self.machine.flash_stats()
+    }
+
+    /// Debug helper: step the CPU instruction-by-instruction for `cycles`,
+    /// recording every BRK syscall dispatch the firmware itself performs
+    /// (PC hits the obj_lu dispatcher 0xE8E1). Returns distinct
+    /// `(id, sig, handler_ptr)` tuples in first-seen order.
+    pub fn trace_syscalls(&mut self, cycles: u64) -> Vec<(u8, u8, u16)> {
+        let mut seen: Vec<(u8, u8, u16)> = Vec::new();
+        let mut last: Option<(u8, u8)> = None;
+        let mut remaining = cycles;
+        while remaining > 0 {
+            let pc = self.cpu.pc;
+            if pc == 0xE8E1 {
+                // Dispatcher entry: 0xB0 = id, 0x046D = signature.
+                last = Some((self.machine.peek(0xB0), self.machine.peek(0x046D)));
+            } else if pc == 0xE996 {
+                // `jmp (0xB0)`: 0xB0/B1 now hold the final handler pointer.
+                if let Some((id, sig)) = last {
+                    let ptr = self.machine.peek_u16(0xB0);
+                    if !seen.contains(&(id, sig, ptr)) {
+                        seen.push((id, sig, ptr));
+                    }
+                }
+            }
+            remaining = remaining.saturating_sub(self.machine.step(&mut self.cpu));
+        }
+        seen
+    }
+
+    /// Trace syscalls across a scripted boot + key sequence, returning the
+    /// distinct `(id, sig, handler)` tuples issued while the keys run.
+    pub fn trace_key_session(
+        &mut self,
+        boot_frames: u32,
+        keys: &[u8],
+        post_frames: u32,
+    ) -> Vec<(u8, u8, u16)> {
+        let mut seen: Vec<(u8, u8, u16)> = Vec::new();
+        let mut last: Option<(u8, u8)> = None;
+        for _ in 0..boot_frames {
+            self.step_frame_traced(&mut seen, &mut last);
+        }
+        for &key in keys {
+            self.machine.set_key(key, true);
+            for _ in 0..8 {
+                self.step_frame_traced(&mut seen, &mut last);
+            }
+            self.machine.set_key(key, false);
+            for _ in 0..12 {
+                self.step_frame_traced(&mut seen, &mut last);
+            }
+        }
+        for _ in 0..post_frames {
+            self.step_frame_traced(&mut seen, &mut last);
+        }
+        seen
+    }
+
+    fn step_frame_traced(&mut self, seen: &mut Vec<(u8, u8, u16)>, last: &mut Option<(u8, u8)>) {
+        let target = self.machine.cycles_per_frame();
+        let mut cycles = 0u64;
+        while cycles < target {
+            let pc = self.cpu.pc;
+            if pc == 0xE8E1 {
+                *last = Some((self.machine.peek(0xB0), self.machine.peek(0x046D)));
+            } else if pc == 0xE996 {
+                if let Some((id, sig)) = *last {
+                    let ptr = self.machine.peek_u16(0xB0);
+                    if !seen.contains(&(id, sig, ptr)) {
+                        seen.push((id, sig, ptr));
+                    }
+                }
+            }
+            cycles += self.machine.step(&mut self.cpu);
+        }
+        self.machine.end_of_frame(&mut self.cpu);
+    }
+
+    /// Debug helper: press `key_id` for `hold_frames`, then release with a gap.
+    pub fn debug_press_key(&mut self, key_id: u8, hold_frames: u32) {
+        self.machine.set_key(key_id, true);
+        for _ in 0..hold_frames {
+            self.run_frame();
+        }
+        self.machine.set_key(key_id, false);
+        for _ in 0..12 {
+            self.run_frame();
+        }
     }
 
     /// Read a memory/IO address for debugging.

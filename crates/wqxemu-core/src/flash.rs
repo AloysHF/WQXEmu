@@ -68,6 +68,22 @@ pub struct Flash {
     pub bak2: u8,
     /// Flash buffer for buffer programming
     pub buffer: Vec<u8>,
+    /// Diagnostics: number of write() calls that reached the controller.
+    #[serde(skip)]
+    pub write_calls: u32,
+    /// Diagnostics: number of byte-program operations applied.
+    #[serde(skip)]
+    pub program_ops: u32,
+    /// Diagnostics: number of erase operations applied.
+    #[serde(skip)]
+    pub erase_ops: u32,
+}
+
+/// Whether per-byte program logging is enabled.  Cached because
+/// [`Flash::write`] runs on every flash byte program, i.e. a hot path.
+fn nor_prog_tracing() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("WQX_NORTRACE").is_some())
 }
 
 impl Flash {
@@ -80,6 +96,9 @@ impl Flash {
             bak1: 0,
             bak2: 0,
             buffer: vec![0; 0x100],
+            write_calls: 0,
+            program_ops: 0,
+            erase_ops: 0,
         }
     }
 
@@ -100,6 +119,7 @@ impl Flash {
         if bank_idx >= 0x20 {
             return false;
         }
+        self.write_calls = self.write_calls.saturating_add(1);
 
         let bank_offset = bank_idx as usize * 0x8000;
 
@@ -159,7 +179,19 @@ impl Flash {
                         // Byte program: AND the value with existing data
                         let offset = bank_offset + (addr as usize - 0x4000);
                         if offset < nor.len() {
+                            // Debug aid: log every byte program under the
+                            // `nor_prog` target, but only when NOR tracing is
+                            // explicitly requested (see `WQX_NORTRACE`).  This
+                            // is a hot path, so the env lookup is cached.
+                            if nor_prog_tracing() {
+                                log::info!(
+                                    target: "nor_prog",
+                                    "byte_program 0x{:05X} <- 0x{:02X} (bank {})",
+                                    offset, value, bank_idx
+                                );
+                            }
                             nor[offset] &= value;
+                            self.program_ops = self.program_ops.saturating_add(1);
                         }
                         self.step = FlashStep::Idle;
                         return true;
@@ -203,6 +235,7 @@ impl Flash {
                             }
                         }
                         self.buffer.fill(0xFF);
+                        self.erase_ops = self.erase_ops.saturating_add(1);
                         self.step = FlashStep::Idle;
                         return true;
                     }
@@ -212,6 +245,7 @@ impl Flash {
                         let sector_end = sector_start + 0x800;
                         if sector_end <= nor.len() {
                             nor[sector_start..sector_end].fill(0xFF);
+                            self.erase_ops = self.erase_ops.saturating_add(1);
                         }
                         self.step = FlashStep::Idle;
                         return true;
